@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from PySide6.QtWidgets import QApplication, QFrame
+from PySide6.QtWidgets import QApplication
 
 import visionplay
-from visionplay.ui.main_window import LAUNCHER_PLACEHOLDER_NAME, MainWindow
+from visionplay.ui.launcher.launcher_widget import LauncherWidget
+from visionplay.ui.main_window import MainWindow
 from visionplay.ui.widgets.camera_view import CameraView
 
 
@@ -20,10 +21,10 @@ class TestConstruction:
         assert window.centralWidget() is not None
         assert window.camera_view.parent() is window.centralWidget()
 
-    def test_launcher_placeholder_is_present(self, qapp: QApplication) -> None:
+    def test_launcher_widget_is_embedded(self, qapp: QApplication) -> None:
         window = MainWindow()
-        placeholder = window.findChild(QFrame, LAUNCHER_PLACEHOLDER_NAME)
-        assert placeholder is not None
+        assert isinstance(window.launcher, LauncherWidget)
+        assert window.launcher.parent() is window.centralWidget()
 
 
 class TestClose:

@@ -16,11 +16,16 @@ from pathlib import Path
 import numpy as np
 import pytest
 from PySide6.QtWidgets import QApplication
+from tests.fixtures.plugin_apps_fixture._support import RecordingPlugin
 
 from visionplay.app import VisionPlayApp
 from visionplay.core.paths import AppPaths
 from visionplay.vision.camera.camera_source import CameraError, CameraSource
 from visionplay.vision.pipeline.frame_types import Frame
+
+#: Fixture apps package (M1.2) used to test launcher->registry->pipeline
+#: wiring without depending on any real app existing under visionplay.apps.
+FIXTURE_APPS_PACKAGE = "tests.fixtures.plugin_apps_fixture"
 
 
 def wait_until(predicate: Callable[[], bool], timeout: float = 5.0) -> bool:
@@ -164,3 +169,96 @@ class TestShutdown:
         )
         assert process_events_until(qapp, status_shows_error)
         app.shutdown()
+
+
+class TestLauncherIntegration:
+    """M1.6: launcher selection -> registry start/stop -> pipeline dispatch."""
+
+    def test_launcher_is_populated_from_the_registry(
+        self, qapp: QApplication, tmp_path: Path
+    ) -> None:
+        app = VisionPlayApp(
+            AppPaths.for_root(tmp_path),
+            source=FakeSource(),
+            apps_package=FIXTURE_APPS_PACKAGE,
+        )
+        window = app.start()
+        assert window.launcher.manifests == app.registry.manifests
+        assert "valid_app" in window.launcher.manifests
+        app.shutdown()
+
+    def test_selecting_app_starts_it_in_registry_and_activates_it_in_pipeline(
+        self, qapp: QApplication, tmp_path: Path
+    ) -> None:
+        app = VisionPlayApp(
+            AppPaths.for_root(tmp_path),
+            source=FakeSource(),
+            apps_package=FIXTURE_APPS_PACKAGE,
+        )
+        window = app.start()
+
+        window.launcher.app_launch_requested.emit("valid_app")
+
+        assert app.registry.active_app_id == "valid_app"
+        plugin = app.registry._apps["valid_app"].plugin
+        assert isinstance(plugin, RecordingPlugin)
+        # The pipeline's frame_processor always defers to the registry
+        # (see VisionPlayApp docstring), so activating in the registry is
+        # activating in the pipeline — no separate pipeline call needed.
+        assert wait_until(lambda: "on_frame" in plugin.calls)
+        app.shutdown()
+
+    def test_selecting_second_app_stops_the_first(self, qapp: QApplication, tmp_path: Path) -> None:
+        app = VisionPlayApp(
+            AppPaths.for_root(tmp_path),
+            source=FakeSource(),
+            apps_package=FIXTURE_APPS_PACKAGE,
+        )
+        window = app.start()
+
+        window.launcher.app_launch_requested.emit("valid_app")
+        first_plugin = app.registry._apps["valid_app"].plugin
+        assert isinstance(first_plugin, RecordingPlugin)
+        assert wait_until(lambda: "on_start" in first_plugin.calls)
+
+        window.launcher.app_launch_requested.emit("failing_frame_app")
+
+        assert app.registry.active_app_id == "failing_frame_app"
+        assert "on_stop" in first_plugin.calls
+        app.shutdown()
+
+    def test_no_app_selected_keeps_passthrough_behavior(
+        self, qapp: QApplication, tmp_path: Path
+    ) -> None:
+        app = VisionPlayApp(
+            AppPaths.for_root(tmp_path),
+            source=FakeSource(),
+            apps_package=FIXTURE_APPS_PACKAGE,
+        )
+        window = app.start()
+        # Same M0.6 passthrough proof as TestStartup.test_frames_reach_the_camera_view,
+        # now with a discovered-but-unstarted registry in the loop.
+        assert process_events_until(qapp, lambda: window.camera_view.frames_shown > 0)
+        assert app.registry.active_app_id is None
+        assert window.camera_view.status is None
+        app.shutdown()
+
+    def test_closing_window_stops_the_active_app(self, qapp: QApplication, tmp_path: Path) -> None:
+        app = VisionPlayApp(
+            AppPaths.for_root(tmp_path),
+            source=FakeSource(),
+            apps_package=FIXTURE_APPS_PACKAGE,
+        )
+        window = app.start()
+        window.show()
+
+        window.launcher.app_launch_requested.emit("valid_app")
+        plugin = app.registry._apps["valid_app"].plugin
+        assert isinstance(plugin, RecordingPlugin)
+        assert wait_until(lambda: "on_start" in plugin.calls)
+
+        assert window.close()  # triggers MainWindow.closing -> app.shutdown
+
+        assert app.registry.active_app_id is None
+        assert "on_stop" in plugin.calls
+        assert not app.pipeline.is_running()

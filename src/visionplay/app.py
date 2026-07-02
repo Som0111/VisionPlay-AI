@@ -1,15 +1,26 @@
-"""Qt application bootstrap and composition root (M0.6).
+"""Qt application bootstrap and composition root (M0.6, M1.6).
 
 Wires the platform in dependency order — paths → config → logging →
-event bus → camera source → frame pipeline → window + frame bridge — and
-owns the shutdown path: closing the main window stops the bridge consumer
-and the capture worker and releases the camera before the process exits.
+event bus → plugin registry → camera source → frame pipeline → window +
+frame bridge — and owns the shutdown path: closing the main window stops
+the active app, then the bridge consumer and the capture worker, and
+releases the camera before the process exits.
 
 :class:`VisionPlayApp` is the composition root; :func:`main` (the
 ``python -m visionplay`` entry) merely creates the ``QApplication``, runs
 the event loop, and guarantees shutdown on the way out. Construction is
-deliberately injectable (``paths``, ``source``) so startup can be tested
-headless with a synthetic camera and a temp directory.
+deliberately injectable (``paths``, ``source``, ``apps_package``) so
+startup can be tested headless with a synthetic camera, a temp directory,
+and a fixture apps package.
+
+Launcher wiring (M1.6): the frame pipeline's per-frame processor is set
+once, at construction, to :meth:`PluginRegistry.process_frame` — that
+method already dispatches to whichever app the registry considers active,
+so "telling the pipeline which plugin is active" is simply a matter of
+telling the *registry* (:meth:`PluginRegistry.start`); no per-launch
+pipeline reconfiguration is needed. With no app ever started, the registry
+has no active app and ``process_frame`` is a passthrough, so the M0.5/M0.6
+camera-only behavior is unchanged.
 """
 
 from __future__ import annotations
@@ -24,6 +35,7 @@ from visionplay.core.config import Config, load_config
 from visionplay.core.event_bus import EventBus
 from visionplay.core.logging_setup import setup_logging
 from visionplay.core.paths import AppPaths
+from visionplay.core.plugin_registry import PluginRegistry
 from visionplay.ui.main_window import MainWindow
 from visionplay.ui.widgets.frame_bridge import FrameBridge
 from visionplay.vision.camera.camera_source import CameraSource
@@ -48,6 +60,7 @@ class VisionPlayApp:
         paths: AppPaths | None = None,
         *,
         source: CameraSource | None = None,
+        apps_package: str = "visionplay.apps",
     ) -> None:
         """Bootstrap the headless platform layers.
 
@@ -56,17 +69,23 @@ class VisionPlayApp:
                 defaults. Directories are created if missing.
             source: Camera source override for tests; ``None`` builds a
                 :class:`WebcamSource` from the ``camera`` config section.
+            apps_package: Dotted package the plugin registry discovers apps
+                under. Defaults to the real ``visionplay.apps`` tree; tests
+                pass a fixture apps package instead.
         """
         self._paths = (paths if paths is not None else AppPaths.default()).ensure()
         self._config = load_config(self._paths.config_file)
         setup_logging(self._paths.log_file, level=self._config.get("app", "log_level", "INFO"))
         logger.info("VisionPlay AI v%s starting", __version__)
         self._event_bus = EventBus()
+        self._registry = PluginRegistry(event_bus=self._event_bus, apps_package=apps_package)
+        self._registry.discover()
         self._source = source if source is not None else _webcam_from_config(self._config)
         target_fps = self._config.get("camera", "target_fps", 30)
         self._pipeline = FramePipeline(
             self._source,
             event_bus=self._event_bus,
+            frame_processor=self._registry.process_frame,
             target_fps=float(target_fps) if target_fps > 0 else None,
         )
         self._bridge: FrameBridge | None = None
@@ -86,6 +105,11 @@ class VisionPlayApp:
     def event_bus(self) -> EventBus:
         """The platform event bus shared by Qt-free layers."""
         return self._event_bus
+
+    @property
+    def registry(self) -> PluginRegistry:
+        """The plugin registry (apps discovered at construction time)."""
+        return self._registry
 
     @property
     def pipeline(self) -> FramePipeline:
@@ -112,6 +136,8 @@ class VisionPlayApp:
         if self._window is not None:
             raise RuntimeError("VisionPlayApp is already started")
         window = MainWindow()
+        window.launcher.set_apps(self._registry.manifests)
+        window.launcher.app_launch_requested.connect(self._on_app_launch_requested)
         bridge = FrameBridge(self._pipeline)
         # Cross-thread by design: the bridge emits from its consumer thread,
         # Qt queues delivery onto the widget's (main) thread.
@@ -125,12 +151,27 @@ class VisionPlayApp:
         logger.info("Frame pipeline and bridge started")
         return window
 
+    def _on_app_launch_requested(self, app_id: str) -> None:
+        """Start the requested app, stopping any previously active one first.
+
+        Connected to :attr:`~visionplay.ui.launcher.launcher_widget.LauncherWidget.
+        app_launch_requested`. The registry's own exclusivity rule (M1.2)
+        handles stopping whichever app was previously active; the pipeline
+        needs no separate notification since its frame processor already
+        always defers to :meth:`PluginRegistry.process_frame`.
+
+        Args:
+            app_id: The manifest id of the app the user selected.
+        """
+        self._registry.start(app_id)
+
     def shutdown(self) -> None:
-        """Stop the bridge and pipeline, releasing the camera. Idempotent.
+        """Stop the active app, then the bridge and pipeline. Idempotent.
 
         Runs when the main window closes (via :attr:`MainWindow.closing`)
         and again as a belt-and-braces measure after the event loop exits.
         """
+        self._registry.stop_active()
         bridge = self._bridge
         self._bridge = None
         if bridge is not None:
