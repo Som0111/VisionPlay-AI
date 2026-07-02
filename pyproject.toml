@@ -1,0 +1,123 @@
+[build-system]
+requires = ["setuptools>=77"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "visionplay"
+dynamic = ["version"]
+description = "Desktop platform for computer vision games, utilities, and AI demos."
+readme = "README.md"
+# Upper bound intentional: mediapipe ships no CPython 3.13 wheels yet.
+requires-python = ">=3.12,<3.13"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Soumya Padhi", email = "padhi.malay@gmail.com" }]
+keywords = ["computer-vision", "opencv", "mediapipe", "pyside6", "games"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Environment :: Win32 (MS Windows)",
+    "Operating System :: Microsoft :: Windows",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Video :: Capture",
+]
+
+# Pinned exactly: this is an application, not a library — reproducible builds
+# matter more than dependency range flexibility. CPU-only per architecture §5
+# (onnxruntime, never onnxruntime-gpu).
+dependencies = [
+    "PySide6==6.8.1",
+    # contrib variant, not opencv-python: mediapipe requires opencv-contrib-python,
+    # and both distributions install the same `cv2` package — having two pinned at
+    # different versions means whichever installs last silently wins.
+    "opencv-contrib-python==4.11.0.86",
+    "mediapipe==0.10.20",
+    "onnxruntime==1.20.1",
+    "platformdirs==4.3.6",
+    "PyYAML==6.0.2",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff==0.8.4",
+    "mypy==1.14.0",
+    "pytest==8.3.4",
+    "pytest-cov==6.0.0",
+    "types-PyYAML==6.0.12.20240917",
+]
+
+[project.urls]
+Repository = "https://github.com/soumyapadhi/VisionPlay-AI"
+
+[project.scripts]
+visionplay = "visionplay.__main__:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.dynamic]
+version = { attr = "visionplay.__version__" }
+
+[tool.ruff]
+target-version = "py312"
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "C4",  # flake8-comprehensions
+    "TID", # flake8-tidy-imports (enforces the layering bans below)
+    "RUF", # ruff-specific
+]
+
+# Layering rule from docs/architecture.md: core/ and vision/ must stay Qt-free.
+# Qt imports are banned repo-wide, then re-allowed only where Qt belongs.
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"PySide6".msg = "Qt is only allowed in ui/, app bootstrap, and apps/*/widget.py (see CLAUDE.md layering rules)."
+
+[tool.ruff.lint.per-file-ignores]
+"src/visionplay/ui/**" = ["TID251"]
+"src/visionplay/app.py" = ["TID251"]
+"src/visionplay/apps/*/widget.py" = ["TID251"]
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.mypy]
+python_version = "3.12"
+mypy_path = "src"
+packages = ["visionplay"]
+warn_unused_configs = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+no_implicit_optional = true
+check_untyped_defs = true
+
+# Strict on the headless layers (per M0.1: core/ and vision/ must be
+# rigorously typed since they're the foundation everything builds on).
+[[tool.mypy.overrides]]
+module = ["visionplay.core.*", "visionplay.vision.*"]
+strict = true
+
+# Third-party CV libs ship incomplete or no type stubs.
+[[tool.mypy.overrides]]
+module = ["cv2.*", "mediapipe.*", "onnxruntime.*"]
+ignore_missing_imports = true
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra --strict-markers"
+markers = [
+    "webcam: requires a physical camera; skipped in CI",
+    "integration: cross-component tests (tests/integration)",
+]
+
+[tool.coverage.run]
+source = ["src/visionplay"]
