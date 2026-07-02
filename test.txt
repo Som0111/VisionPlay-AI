@@ -1,0 +1,2 @@
+Hello VisionPlay AI
+claude --resume c3464e5b-67dd-490b-830a-0ce31025fc69 (till phase 0)
