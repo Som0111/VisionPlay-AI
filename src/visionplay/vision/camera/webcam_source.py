@@ -2,7 +2,7 @@
 
 Implements the :class:`~visionplay.vision.camera.camera_source.CameraSource`
 contract for a live, locally attached camera. Backend selection is explicit
-(``docs/phase-0-checklist.md`` M0.4): on Windows, MSMF is tried first and
+(``docs/checklists/phase-0-checklist.md`` M0.4): on Windows, MSMF is tried first and
 DirectShow second — MSMF is the modern API but some UVC devices/drivers only
 behave under DirectShow. Other platforms use OpenCV's auto-selection, which
 keeps this module portable even though only Windows is packaged in v1.

@@ -18,6 +18,8 @@ class TestDefaultConfig:
         d = default_config()
         assert d["app"]["log_level"] == "INFO"
         assert d["camera"]["device_index"] == 0
+        assert d["inference"]["device"] == {"type": "cpu"}
+        assert d["inference"]["model_cache_dir"] is None
 
     def test_returns_independent_copies(self) -> None:
         a = default_config()
@@ -136,3 +138,30 @@ class TestValidationErrors:
         config.set("app", "bad", object())
         with pytest.raises(ConfigError, match="cannot be written as YAML"):
             config.save()
+
+    def test_non_mapping_inference_device_raises(self, cfg_path: Path) -> None:
+        cfg_path.write_text("inference:\n  device: cpu\n", encoding="utf-8")
+        with pytest.raises(ConfigError, match="inference.device must be a mapping"):
+            load_config(cfg_path)
+
+    def test_non_string_model_cache_dir_raises(self, cfg_path: Path) -> None:
+        cfg_path.write_text("inference:\n  model_cache_dir: 5\n", encoding="utf-8")
+        with pytest.raises(ConfigError, match="inference.model_cache_dir"):
+            load_config(cfg_path)
+
+
+class TestInferenceNamespace:
+    def test_device_default_is_cpu_mapping(self, cfg_path: Path) -> None:
+        config = load_config(cfg_path, create_if_missing=False)
+        assert config.get("inference", "device") == {"type": "cpu"}
+
+    def test_model_cache_dir_defaults_to_none(self, cfg_path: Path) -> None:
+        config = load_config(cfg_path, create_if_missing=False)
+        assert config.get("inference", "model_cache_dir") is None
+
+    def test_file_device_override_is_preserved(self, cfg_path: Path) -> None:
+        cfg_path.write_text("inference:\n  model_cache_dir: /tmp/models\n", encoding="utf-8")
+        config = load_config(cfg_path)
+        assert config.get("inference", "model_cache_dir") == "/tmp/models"
+        # untouched inference defaults still filled in
+        assert config.get("inference", "device") == {"type": "cpu"}

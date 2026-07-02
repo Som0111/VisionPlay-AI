@@ -9,6 +9,10 @@ of *namespaces* (sections) to key/value mappings::
       device_index: 0
       frame_width: 1280
       frame_height: 720
+    inference:
+      device:
+        type: cpu
+      model_cache_dir: null
 
 Platform code owns the ``app`` and ``camera`` namespaces; app plugins get
 their own namespace keyed by their manifest ``id`` (Phase 1+), which is why
@@ -50,6 +54,15 @@ _DEFAULTS: dict[str, dict[str, Any]] = {
         "frame_width": 1280,
         "frame_height": 720,
         "target_fps": 30,
+    },
+    "inference": {
+        # Resolved into a DeviceConfig on the vision side via
+        # DeviceConfig.from_mapping — core does not import vision, so only the
+        # structural shape is validated here, not the device *type* semantics.
+        "device": {"type": "cpu"},
+        # None -> use AppPaths.models_dir; a string overrides the model cache
+        # location. Resolved by backend_defaults.models_dir_from_config.
+        "model_cache_dir": None,
     },
 }
 
@@ -244,3 +257,19 @@ def _validate(data: dict[str, dict[str, Any]], path: Path) -> None:
         # bool is an int subclass; reject it explicitly.
         if not isinstance(value, int) or isinstance(value, bool) or value < 0:
             raise ConfigError(f"{path}: camera.{key} must be a non-negative integer, got {value!r}")
+
+    # Only the structural shape of the inference namespace is checked here.
+    # Device-type semantics (is "cpu" a known device?) are the vision layer's
+    # job via DeviceConfig.from_mapping — core must not import from vision/.
+    inference = data["inference"]
+    device = inference.get("device")
+    if not isinstance(device, dict):
+        raise ConfigError(
+            f"{path}: inference.device must be a mapping like {{type: cpu}}, got {device!r}"
+        )
+    cache_override = inference.get("model_cache_dir")
+    if cache_override is not None and not isinstance(cache_override, str):
+        raise ConfigError(
+            f"{path}: inference.model_cache_dir must be a string path or null, "
+            f"got {cache_override!r}"
+        )

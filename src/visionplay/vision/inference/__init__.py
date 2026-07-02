@@ -1,1 +1,1 @@
-"""Inference backend abstraction: device config, backends, and the model registry."""
+"""Inference: device config, backends, the backend manager, and model registry."""

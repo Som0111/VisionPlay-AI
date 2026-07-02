@@ -7,7 +7,7 @@ streams, screen capture, and the synthetic sources used in CI tests all
 implement the same four-method contract, so the pipeline above never knows
 which one it is driving.
 
-Error philosophy (``docs/phase-0-checklist.md`` M0.4): failures raise
+Error philosophy (``docs/checklists/phase-0-checklist.md`` M0.4): failures raise
 :class:`CameraError` with a user-presentable message — no silent
 ``None``-returns that the UI can't explain. The one legitimate ``None``
 from :meth:`CameraSource.read` is *end of stream* (e.g. a video file ran
