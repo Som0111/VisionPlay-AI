@@ -9,10 +9,22 @@ Two pieces, matching ``docs/architecture.md`` §4:
   blocks.
 - :class:`FramePipeline` — owns a dedicated worker thread that drives a
   :class:`~visionplay.vision.camera.camera_source.CameraSource`
-  (open → read loop → release, all on the worker), publishes each frame to
-  the bus, and optionally announces
+  (open → read loop → release, all on the worker), runs the optional
+  frame processor (M1.4 — the active app's ``on_frame`` seam, see below),
+  publishes each frame to the bus, and optionally announces
   :class:`~visionplay.core.events.FrameReadyEvent` metadata on the
   :class:`~visionplay.core.event_bus.EventBus`.
+
+Frame processor seam (M1.4, ``docs/architecture.md`` §4 data flow): between
+capture and publish, the worker passes each frame through a settable
+``Callable[[Frame], Frame]`` — in production the plugin registry's
+``process_frame``, which dispatches to the active app's ``on_frame`` under
+the registry's own guard. The pipeline deliberately adds **no** try/except
+of its own around this call: containment policy (log, count consecutive
+failures, stop the app) lives in one place, the registry (M1.2), and the
+processor contract here is simply "must not raise". With no processor set
+(or ``None``), captured frames pass through unchanged — the M0.5/M0.6
+behavior.
 
 Threading contract: the camera source is touched **only** by the worker
 thread. Consumers interact with the pipeline through :class:`FrameBus`
@@ -33,6 +45,7 @@ import logging
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from types import TracebackType
 
 from visionplay.core.event_bus import EventBus
@@ -40,9 +53,15 @@ from visionplay.core.events import FrameReadyEvent
 from visionplay.vision.camera.camera_source import CameraError, CameraSource
 from visionplay.vision.pipeline.frame_types import Frame
 
-__all__ = ["FrameBus", "FramePipeline"]
+__all__ = ["FrameBus", "FramePipeline", "FrameProcessor"]
 
 logger = logging.getLogger(__name__)
+
+#: Per-frame hook run on the worker thread between capture and publish.
+#: Must return the frame to publish and must not raise — exception
+#: containment is the caller's contract (the plugin registry's guard, M1.2),
+#: not the pipeline's.
+FrameProcessor = Callable[[Frame], Frame]
 
 #: Thread name for the capture worker (shows up in debuggers/leak checks).
 _WORKER_THREAD_NAME: str = "visionplay-frame-pipeline"
@@ -165,6 +184,7 @@ class FramePipeline:
         bus: FrameBus | None = None,
         *,
         event_bus: EventBus | None = None,
+        frame_processor: FrameProcessor | None = None,
         target_fps: float | None = None,
         max_consecutive_failures: int = 3,
     ) -> None:
@@ -177,6 +197,11 @@ class FramePipeline:
             event_bus: If given, a :class:`FrameReadyEvent` (metadata only,
                 never pixels) is published per captured frame. Handlers run
                 on the worker thread and must be fast.
+            frame_processor: Per-frame hook run on the worker thread after
+                capture, before publish — the active plugin's ``on_frame``
+                seam (see :data:`FrameProcessor` for its contract). ``None``
+                (the default) publishes captured frames unchanged. Can also
+                be set/cleared later via :meth:`set_frame_processor`.
             target_fps: FPS governor — upper bound on capture rate. ``None``
                 captures as fast as the source delivers.
             max_consecutive_failures: Consecutive ``CameraError`` reads
@@ -195,6 +220,7 @@ class FramePipeline:
         self._source = source
         self._bus = bus if bus is not None else FrameBus(capacity=1)
         self._event_bus = event_bus
+        self._frame_processor = frame_processor
         self._interval = None if target_fps is None else 1.0 / target_fps
         self._max_failures = max_consecutive_failures
         self._thread: threading.Thread | None = None
@@ -220,6 +246,20 @@ class FramePipeline:
     def is_running(self) -> bool:
         """Return ``True`` while the worker thread is alive."""
         return self._thread is not None and self._thread.is_alive()
+
+    def set_frame_processor(self, processor: FrameProcessor | None) -> None:
+        """Install (or clear) the per-frame hook; safe while running.
+
+        Callable from any thread: a single attribute rebind is atomic under
+        the GIL, and the worker re-reads the attribute once per frame — the
+        new processor simply takes effect from the next captured frame.
+
+        Args:
+            processor: The hook to run on each captured frame (see
+                :data:`FrameProcessor` for its no-raise contract), or
+                ``None`` to restore plain passthrough.
+        """
+        self._frame_processor = processor
 
     def start(self) -> None:
         """Spawn the worker thread; it opens the source and begins capturing.
@@ -324,6 +364,13 @@ class FramePipeline:
                 logger.info("Camera source reached end of stream")
                 return
             self._frames_captured += 1
+            # M1.4 seam: capture → active plugin's on_frame → publish. Read
+            # once per frame so a concurrent set_frame_processor is safe. No
+            # try/except here by design — the registry's guard (M1.2) owns
+            # exception containment, and duplicating it would split policy.
+            processor = self._frame_processor
+            if processor is not None:
+                frame = processor(frame)
             self._bus.publish(frame)
             self._announce(frame)
 
