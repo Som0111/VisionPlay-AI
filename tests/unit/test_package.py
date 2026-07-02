@@ -1,8 +1,12 @@
-"""M0.1 smoke tests: the package imports and the entry point exits cleanly."""
+"""Package smoke tests: version and entry-point wiring.
 
-import pytest
+M0.1 gave ``python -m visionplay`` a banner stub; M0.6 replaced it with the
+Qt application bootstrap. Launching the real GUI belongs to the app tests
+(``test_app.py``) — here we only assert the entry point is wired to it.
+"""
 
 import visionplay
+from visionplay import app
 from visionplay.__main__ import main
 
 
@@ -10,6 +14,5 @@ def test_version_is_defined() -> None:
     assert visionplay.__version__
 
 
-def test_main_exits_zero(capsys: pytest.CaptureFixture[str]) -> None:
-    assert main() == 0
-    assert visionplay.__version__ in capsys.readouterr().out
+def test_entry_point_is_the_qt_bootstrap() -> None:
+    assert main is app.main

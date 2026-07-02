@@ -1,19 +1,15 @@
 """Entry point for ``python -m visionplay``.
 
-Phase 0 / M0.1: prints a banner and exits. The Qt application bootstrap
-(``app.py``) replaces the body of ``main`` in M0.6.
+M0.6: launches the Qt application (window + live camera feed). The actual
+bootstrap lives in :mod:`visionplay.app`; this module only re-exports
+``main`` for the console-script entry in ``pyproject.toml``.
 """
 
 import sys
 
-from visionplay import __version__
+from visionplay.app import main
 
-
-def main() -> int:
-    # ASCII only: the Windows console default code page mangles non-ASCII output.
-    print(f"VisionPlay AI v{__version__} - Phase 0 scaffold (no UI yet)")
-    return 0
-
+__all__ = ["main"]
 
 if __name__ == "__main__":
     sys.exit(main())

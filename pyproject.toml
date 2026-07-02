@@ -86,6 +86,8 @@ select = [
 "src/visionplay/ui/**" = ["TID251"]
 "src/visionplay/app.py" = ["TID251"]
 "src/visionplay/apps/*/widget.py" = ["TID251"]
+# Tests may exercise Qt code (the layering ban targets core/ and vision/).
+"tests/**" = ["TID251"]
 
 [tool.ruff.format]
 quote-style = "double"
