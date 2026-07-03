@@ -1,12 +1,12 @@
 """Hand-tracking demo processor: reads ``mediapipe.hands`` results defensively.
 
 Pure logic, no ``PySide6`` import — unit-testable headless
-(``docs/plugin-development.md``). No real backend runs in Phase 1 (M1.4
-wires the pipeline's ``on_frame`` seam, not inference), so
-``frame.results.get(RESULTS_KEY)`` is always ``None`` here — that is the
-expected, normal case to handle, not an error condition. Phase 2 wiring a
-real MediaPipe hands backend populates that key without requiring any
-change to this read.
+(``docs/plugin-development.md``). The pipeline populates
+``frame.results[RESULTS_KEY]`` with a real
+:class:`~visionplay.vision.inference.results.HandLandmarkResult` when the
+``mediapipe.hands`` backend runs; the key is read defensively because it is
+absent whenever the backend is unavailable or failed mid-stream — an
+expected, normal case to handle, not an error condition.
 """
 
 from __future__ import annotations
@@ -15,18 +15,17 @@ from visionplay.vision.pipeline.frame_types import Frame
 
 __all__ = ["RESULTS_KEY", "HandTrackingProcessor"]
 
-#: Key the pipeline stores this app's declared backend's output under, once
-#: Phase 2 wires a real ``mediapipe.hands`` backend (matches
-#: ``MANIFEST.required_backends``).
+#: Key the pipeline stores this app's declared backend's output under
+#: (matches ``MANIFEST.required_backends``).
 RESULTS_KEY: str = "mediapipe.hands"
 
 
 class HandTrackingProcessor:
     """Per-frame logic for the hand-tracking demo.
 
-    Phase 1 has nothing to compute — it only proves that reading an absent
-    backend result is handled gracefully. Phase 2 replaces the body of
-    :meth:`process` with real per-frame landmark handling.
+    A deliberately minimal demo: it reads the landmark result defensively
+    and passes the frame through for the widget to render. Gesture logic
+    built on these landmarks is game territory (Phase 3), not this demo's.
     """
 
     def start(self) -> None:
@@ -36,15 +35,14 @@ class HandTrackingProcessor:
         """Read hand-landmark results defensively; pass the frame through.
 
         Args:
-            frame: The captured frame. In Phase 1,
-                ``frame.results.get(RESULTS_KEY)`` is always ``None`` since
-                no backend runs yet.
+            frame: The captured frame. ``frame.results.get(RESULTS_KEY)``
+                is a ``HandLandmarkResult`` when the backend ran, ``None``
+                when it is unavailable.
 
         Returns:
-            The same frame, unmodified — Phase 2 may annotate/replace it
-            once real landmark data exists.
+            The same frame, unmodified — the widget renders the landmarks.
         """
-        _hands = frame.results.get(RESULTS_KEY)  # forward-compatible read; unused in Phase 1
+        _hands = frame.results.get(RESULTS_KEY)  # defensive read; absent when backend is down
         return frame
 
     def stop(self) -> None:

@@ -1,10 +1,10 @@
-"""Hand-tracking demo widget: passthrough camera render + placeholder overlay.
+"""Hand-tracking demo widget: passthrough camera render + status overlay.
 
-Phase 1 has no real MediaPipe backend running (M1.4 wires the pipeline
-seam, not inference), so ``frame.results.get(RESULTS_KEY)`` is always
-absent — this widget renders the live frame with a fixed "not yet
-available" banner instead of landmarks, proving the render path works end
-to end. Phase 2 replaces the banner with real landmark drawing.
+Renders the live frame plus a text overlay of the ``mediapipe.hands``
+result: the detected-hands summary when the backend ran, or a fixed
+"unavailable" banner when ``frame.results`` has no entry (backend missing
+or failed — the defensive case every app must handle). Graphical landmark
+drawing on top of the frame is Phase 3 polish.
 
 Receives frames only through :meth:`HandTrackingWidget.on_frame_ready` —
 never by calling into ``plugin.py``/``processor.py`` directly.
@@ -23,8 +23,8 @@ from .processor import RESULTS_KEY
 
 __all__ = ["NO_DATA_MESSAGE", "HandTrackingWidget"]
 
-#: Shown whenever frame.results has no RESULTS_KEY entry yet (always, in Phase 1).
-NO_DATA_MESSAGE: str = "Hand-tracking data not yet available (Phase 2)."
+#: Shown whenever frame.results has no RESULTS_KEY entry (backend unavailable).
+NO_DATA_MESSAGE: str = "Hand-tracking backend unavailable."
 
 
 class HandTrackingWidget(QWidget):

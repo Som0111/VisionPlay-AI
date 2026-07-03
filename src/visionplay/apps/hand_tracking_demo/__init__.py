@@ -2,10 +2,11 @@
 
 The first real, registrable app (not underscore-prefixed, so
 ``PluginRegistry.discover`` picks it up). It declares
-``required_backends=("mediapipe.hands",)`` but runs with no real backend
-behind that key yet — Phase 2 wires an actual MediaPipe hands backend.
-Until then this app exercises registry discovery, the full ``AppPlugin``
-lifecycle, launcher listing, and the frame pipeline's ``on_frame`` seam
-(M1.1-M1.6) end to end, exactly like ``apps/_template`` but as a real,
-launchable app rather than a scaffold.
+``required_backends=("mediapipe.hands",)``, so since Phase 2 the pipeline
+runs real MediaPipe hand-landmark inference and delivers a
+``HandLandmarkResult`` under that key in ``frame.results`` — with zero code
+changes to this app relative to Phase 1, proving the plugin contract held.
+It exercises registry discovery, the full ``AppPlugin`` lifecycle, launcher
+capability negotiation, and the capture → backend → ``on_frame`` → publish
+path end to end.
 """

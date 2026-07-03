@@ -29,7 +29,7 @@ class Plugin(AppPlugin):
         """Start the processor's per-run state.
 
         No camera/model resources are acquired directly here — the
-        pipeline owns the camera and (in Phase 2) the declared backend.
+        pipeline owns the camera and the declared backend.
         """
         self._processor.start()
 

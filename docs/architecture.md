@@ -158,10 +158,16 @@ through the bus, and do not grow it into a general message broker.
 ## 5. Inference Backend Abstraction
 
 `InferenceBackend` ABC with `MediaPipeBackend` (hand/pose/face landmarks) and `ONNXBackend`
-(custom models — e.g. YOLO for the AI-demos category). **v1 ships CPU-only** — no GPU
-dependency, no CUDA/DirectML package, no GPU-specific code path anywhere in `vision/`. GPU
-support is deferred, not designed away: the abstraction is shaped now so enabling it later is
-additive.
+(custom models — e.g. YOLO for the AI-demos category). **Implemented as of Phase 2**: both
+backends run real CPU inference (`MediaPipeBackend` builds a MediaPipe Tasks graph for hand
+landmarks; `ONNXBackend` runs an `onnxruntime.InferenceSession`), and return **standardized
+result objects** (`results.py` — `HandLandmarkResult`, `TensorOutput`, ...) so plugin code
+never imports MediaPipe/`onnxruntime` types. A `BackendManager` (`backend_manager.py`) owns
+instances by name via registered factory/probe pairs (`backend_defaults.py`), warm-caches them
+across app switches, and answers the launcher's availability queries; the concrete model list
+lives in `model_catalog.py`. **v1 ships CPU-only** — no GPU dependency, no CUDA/DirectML
+package, no GPU-specific code path anywhere in `vision/`. GPU support is deferred, not
+designed away: the abstraction is shaped so enabling it later is additive.
 
 **How the abstraction stays GPU-ready without adding GPU code in v1:**
 
@@ -177,7 +183,8 @@ additive.
 - `MediaPipeBackend` takes the same shape: MediaPipe's Tasks API accepts a `delegate`
   (`CPU`/`GPU`) per task; v1 always passes `CPU`, but the parameter already exists on the
   call, so flipping it later doesn't touch the surrounding pipeline code.
-- `model_registry.py` tags cached models by **format** (`onnx`, `tflite`), never by device —
+- `model_registry.py` tags cached models by **format** (`onnx`, `tflite`, `task`), never by
+  device —
   device selection is a runtime backend concern, not a model-catalog concern, so the registry
   needs no changes when GPU support lands.
 - The v1 dependency set installs CPU-only packages (`onnxruntime`, not `onnxruntime-gpu`;

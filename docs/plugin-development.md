@@ -28,8 +28,11 @@ apps/<app_name>/
 - `version` — the app's own version, independent of the platform version
 - `api_version` — which version of the `AppPlugin` contract this app targets; used by the
   registry to reject apps built against an incompatible interface
-- `required_backends` — list of inference backends/capabilities this app needs (e.g.
-  `["mediapipe.hands"]`, `["onnx"]`); used for capability negotiation in the launcher
+- `required_backends` — list of inference backend names this app needs, matching the names
+  registered with the platform's `BackendManager` (v1 ships `"mediapipe.hands"`; ONNX
+  backends register as `"onnx.<model_id>"`). The launcher checks these against actual
+  availability (runtime importable, model registered) and greys out apps it can't satisfy;
+  selecting a greyed-out app does nothing rather than crashing at launch
 - `icon` — path to the app's launcher icon, relative to its `assets/` folder
 
 ## `AppPlugin` lifecycle
@@ -39,9 +42,14 @@ apps/<app_name>/
 - `on_start` — called when the user opens the app from the launcher; acquire camera/model
   resources here
 - `on_frame(frame)` — called once per frame **on the pipeline worker thread** (never the Qt
-  main thread). The frame arrives with inference results already attached
-  (`frame.results` — landmarks/detections from the backends declared in the manifest);
-  plugins never run backends themselves. Delegate logic to `processor.py`, never touch Qt
+  main thread). The frame arrives with inference results already attached: `frame.results`
+  is keyed by backend name and holds **standardized result objects** from
+  `vision/inference/results.py` (e.g. `frame.results["mediapipe.hands"]` is a
+  `HandLandmarkResult`; ONNX backends return a `TensorOutput`) — never raw
+  MediaPipe/`onnxruntime` types, so `processor.py` needs no CV-runtime imports. Read the key
+  defensively (`frame.results.get(...)`): a backend that failed to load or errored
+  mid-stream leaves its key absent for that frame rather than crashing your app. Plugins
+  never run backends themselves. Delegate logic to `processor.py`, never touch Qt
   objects from here, and keep per-frame cost bounded — a slow `on_frame` causes the
   pipeline to drop frames for your app, not queue them
 - `on_stop` — release camera/model resources

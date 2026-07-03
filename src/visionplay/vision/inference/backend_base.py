@@ -1,7 +1,6 @@
 """Abstract inference backend: the seam every model runtime implements.
 
-Phase 0 defines only the interface and lifecycle; real inference arrives in
-Phase 2. The contract mirrors :class:`~visionplay.vision.camera.camera_source.CameraSource`
+The contract mirrors :class:`~visionplay.vision.camera.camera_source.CameraSource`
 on purpose — ``load()`` → ``infer()`` (repeatedly) → ``unload()``, plus a
 context manager — so the pipeline drives cameras and backends with the same
 idioms.
@@ -100,8 +99,6 @@ class InferenceBackend(ABC):
         Raises:
             InferenceError: If called before :meth:`load` or after
                 :meth:`unload`, or on a runtime failure mid-stream.
-            NotImplementedError: Phase 0 stubs raise this; real inference
-                is Phase 2.
         """
 
     @abstractmethod

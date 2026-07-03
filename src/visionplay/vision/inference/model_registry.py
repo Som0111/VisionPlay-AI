@@ -13,7 +13,7 @@ support lands.
 
 The actual network transfer sits behind the :class:`ModelDownloader`
 abstraction: tests inject in-memory fakes, while :class:`HttpModelDownloader`
-(added in Phase 2) fetches over HTTP(S). The registry itself never touches the
+fetches over HTTP(S) in production. The registry itself never touches the
 network — it only orchestrates caching, verification, and atomic placement.
 """
 
@@ -113,8 +113,8 @@ class ModelDownloader(ABC):
     """Abstract transfer of one artifact from a URL to a local path.
 
     Deliberately minimal: the registry handles caching, verification, and
-    atomic placement; implementations only move bytes. Phase 0 has no real
-    (network) implementation — tests substitute in-memory fakes.
+    atomic placement; implementations only move bytes. Production uses
+    :class:`HttpModelDownloader`; tests substitute in-memory fakes.
     """
 
     @abstractmethod
@@ -197,8 +197,8 @@ class ModelRegistry:
             models_dir: Directory holding cached artifacts. Created on
                 first :meth:`ensure`, not here.
             downloader: Transfer implementation for cache misses. ``None``
-                is valid for cache-only operation (Phase 0 default);
-                :meth:`ensure` then fails loudly on a miss.
+                is valid for cache-only operation; :meth:`ensure` then
+                fails loudly on a miss.
         """
         self._models_dir = models_dir
         self._downloader = downloader

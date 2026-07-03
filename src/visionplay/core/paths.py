@@ -49,7 +49,7 @@ class AppPaths:
         config_dir: Directory for user configuration (``config.yaml``).
         cache_dir: Directory for general-purpose cached data.
         models_dir: Directory for the downloaded/checksum-verified model
-            cache managed by ``model_registry.py`` (Phase 2).
+            cache managed by ``model_registry.py``.
         log_dir: Directory for rotating log files.
     """
 

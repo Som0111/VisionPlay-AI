@@ -18,6 +18,6 @@ MANIFEST = AppManifest(
     category="ai_demos",  # TODO: one of APP_CATEGORIES (see plugin_base.py)
     version="0.1.0",  # TODO: this app's own version, independent of the platform version
     api_version=CURRENT_API_VERSION,  # keep in sync with the AppPlugin contract you target
-    required_backends=(),  # TODO: e.g. ("mediapipe.hands",) — capability negotiation is Phase 2
+    required_backends=(),  # TODO: e.g. ("mediapipe.hands",) — unavailable names grey the app out
     icon="assets/icon.png",  # TODO: path relative to this app's own assets/ folder
 )

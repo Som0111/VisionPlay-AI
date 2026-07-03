@@ -60,7 +60,7 @@ _ONNX_ELEMENT_TYPE_TO_NUMPY: dict[str, type[np.generic]] = {
 
 
 class ONNXBackend(InferenceBackend):
-    """Runs one ONNX model over frames (stub — Phase 2 wires the session).
+    """Runs one ONNX model over frames via ``onnxruntime.InferenceSession``.
 
     The model artifact itself is materialized by the
     :class:`~visionplay.vision.inference.model_registry.ModelRegistry`;
