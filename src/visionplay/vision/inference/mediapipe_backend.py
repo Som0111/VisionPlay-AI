@@ -1,11 +1,13 @@
 """MediaPipe landmark backend (hand/pose/face).
 
 ``load()`` builds a real MediaPipe Tasks graph; ``infer()`` runs it on a frame
-and returns standardized
-:class:`~visionplay.vision.inference.results.HandLandmarkResult` output — no
-MediaPipe types cross into plugin code. v1 implements the **hand** landmark
-task (``MediaPipeTask.HAND_LANDMARKS``); pose and face are reserved for a
-later phase and their :meth:`MediaPipeBackend.load` raises until then.
+and returns standardized landmark output
+(:class:`~visionplay.vision.inference.results.HandLandmarkResult`,
+:class:`~visionplay.vision.inference.results.PoseLandmarkResult`, or
+:class:`~visionplay.vision.inference.results.FaceLandmarkResult`) — no
+MediaPipe types cross into plugin code. All three landmark tasks are
+implemented; which one an instance runs is fixed by the
+:class:`MediaPipeTask` it is constructed with.
 
 The model asset (a ``.task`` bundle) is not bundled or downloaded by this
 class — the pipeline resolves it through the
@@ -22,6 +24,8 @@ touching the surrounding pipeline.
 
 from __future__ import annotations
 
+from collections.abc import Callable
+from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -31,10 +35,21 @@ import numpy.typing as npt
 
 from visionplay.vision.inference.backend_base import InferenceBackend, InferenceError
 from visionplay.vision.inference.device import DeviceConfig, DeviceType
-from visionplay.vision.inference.results import HandLandmarkResult, HandLandmarks, LandmarkPoint
+from visionplay.vision.inference.results import (
+    FaceLandmarkResult,
+    FaceLandmarks,
+    HandLandmarkResult,
+    HandLandmarks,
+    LandmarkPoint,
+    PoseLandmarkResult,
+    PoseLandmarks,
+)
 from visionplay.vision.pipeline.frame_types import ColorFormat, Frame
 
-__all__ = ["MediaPipeBackend", "MediaPipeTask"]
+__all__ = ["LandmarkResult", "MediaPipeBackend", "MediaPipeTask"]
+
+#: The standardized output types a MediaPipe backend can produce, one per task.
+LandmarkResult = HandLandmarkResult | PoseLandmarkResult | FaceLandmarkResult
 
 #: DeviceType → MediaPipe Tasks delegate name. GPU support later appends an
 #: entry here (e.g. ``DeviceType.GPU: "GPU"``) — an additive change only.
@@ -44,6 +59,14 @@ _DELEGATES: dict[DeviceType, str] = {
 
 #: Maximum number of hands the hand landmarker detects per frame.
 _MAX_HANDS: int = 2
+
+#: Maximum number of people the pose landmarker detects per frame. One keeps
+#: per-frame CPU cost bounded; fitness-style apps track a single subject.
+_MAX_POSES: int = 1
+
+#: Maximum number of faces the face landmarker detects per frame. Two leaves
+#: room for multi-face AR filters without unbounded per-frame cost.
+_MAX_FACES: int = 2
 
 
 class MediaPipeTask(Enum):
@@ -59,12 +82,30 @@ class MediaPipeTask(Enum):
     FACE_LANDMARKS = "face"
 
 
+@dataclass(frozen=True, slots=True)
+class _TaskBinding:
+    """How one :class:`MediaPipeTask` maps onto the MediaPipe Tasks API.
+
+    Attributes:
+        landmarker_name: Landmarker class name on ``mediapipe.tasks.python.vision``.
+        options_name: Matching options class name on the same module.
+        count_option: The options kwarg limiting detections per frame.
+        max_count: Value passed for :attr:`count_option`.
+        convert: Maps the task's native result to the standardized shape.
+    """
+
+    landmarker_name: str
+    options_name: str
+    count_option: str
+    max_count: int
+    convert: Callable[[Any], LandmarkResult]
+
+
 class MediaPipeBackend(InferenceBackend):
     """Runs one MediaPipe landmark task over frames.
 
     One instance handles exactly one task; an app needing both hands and pose
     declares two ``required_backends`` and the pipeline owns two instances.
-    v1 implements only :attr:`MediaPipeTask.HAND_LANDMARKS`.
     """
 
     def __init__(
@@ -84,7 +125,7 @@ class MediaPipeBackend(InferenceBackend):
         super().__init__(device)
         self._task = task
         self._model_path = model_path
-        # mediapipe HandLandmarker once loaded; None while unloaded. Typed Any
+        # mediapipe landmarker once loaded; None while unloaded. Typed Any
         # because mediapipe ships no stubs (see pyproject mypy overrides).
         self._landmarker: Any = None
 
@@ -116,17 +157,12 @@ class MediaPipeBackend(InferenceBackend):
         with a graph already built is a no-op.
 
         Raises:
-            InferenceError: If the task is not implemented in v1, the model
-                file is missing, ``mediapipe`` is not importable, or the graph
-                cannot be created — all user-presentable.
+            InferenceError: If the model file is missing, ``mediapipe`` is not
+                importable, or the graph cannot be created — all
+                user-presentable.
         """
         if self._landmarker is not None:
             return
-        if self._task is not MediaPipeTask.HAND_LANDMARKS:
-            raise InferenceError(
-                f"MediaPipe task {self._task.value!r} is not implemented in this version; "
-                f"only {MediaPipeTask.HAND_LANDMARKS.value!r} is available"
-            )
         if not self._model_path.is_file():
             raise InferenceError(f"Model file for {self.name!r} not found at {self._model_path}")
         try:
@@ -136,31 +172,34 @@ class MediaPipeBackend(InferenceBackend):
             raise InferenceError(
                 f"MediaPipe is not available; cannot load backend {self.name!r}"
             ) from exc
+        binding = _TASK_BINDINGS[self._task]
         try:
             delegate = getattr(mp_python.BaseOptions.Delegate, self.delegate)
-            options = vision.HandLandmarkerOptions(
+            options_cls = getattr(vision, binding.options_name)
+            landmarker_cls = getattr(vision, binding.landmarker_name)
+            options = options_cls(
                 base_options=mp_python.BaseOptions(
                     model_asset_path=str(self._model_path), delegate=delegate
                 ),
                 running_mode=vision.RunningMode.IMAGE,
-                num_hands=_MAX_HANDS,
+                **{binding.count_option: binding.max_count},
             )
-            self._landmarker = vision.HandLandmarker.create_from_options(options)
+            self._landmarker = landmarker_cls.create_from_options(options)
         except Exception as exc:
             raise InferenceError(
                 f"Failed to load MediaPipe graph for {self.name!r}: {exc}"
             ) from exc
 
-    def infer(self, frame: Frame) -> HandLandmarkResult:
-        """Run hand-landmark detection on ``frame`` and return standardized output.
+    def infer(self, frame: Frame) -> LandmarkResult:
+        """Run landmark detection on ``frame`` and return standardized output.
 
         Args:
             frame: The captured frame to run inference on.
 
         Returns:
-            The detected hands as a
-            :class:`~visionplay.vision.inference.results.HandLandmarkResult`;
-            empty when no hand is in view (the normal case, not an error).
+            The task's standardized result (:class:`HandLandmarkResult`,
+            :class:`PoseLandmarkResult`, or :class:`FaceLandmarkResult`);
+            empty when nothing is in view (the normal case, not an error).
 
         Raises:
             InferenceError: If the backend is not loaded or detection fails.
@@ -175,7 +214,7 @@ class MediaPipeBackend(InferenceBackend):
             detection = self._landmarker.detect(mp_image)
         except Exception as exc:
             raise InferenceError(f"MediaPipe inference failed for {self.name!r}: {exc}") from exc
-        return _to_hand_result(detection)
+        return _TASK_BINDINGS[self._task].convert(detection)
 
     def unload(self) -> None:
         """Release the MediaPipe graph. Idempotent; safe if never loaded."""
@@ -205,18 +244,65 @@ def _to_rgb(frame: Frame) -> npt.NDArray[np.uint8]:
     return np.ascontiguousarray(rgb, dtype=np.uint8)
 
 
+def _to_points(landmarks: Any) -> tuple[LandmarkPoint, ...]:
+    """Map one MediaPipe normalized-landmark list to :class:`LandmarkPoint`s."""
+    return tuple(LandmarkPoint(x=lm.x, y=lm.y, z=lm.z) for lm in landmarks)
+
+
 def _to_hand_result(detection: Any) -> HandLandmarkResult:
     """Map a MediaPipe ``HandLandmarkerResult`` to the standardized shape."""
     hands: list[HandLandmarks] = []
     hand_landmarks = detection.hand_landmarks
     handedness = detection.handedness
     for index, landmarks in enumerate(hand_landmarks):
-        points = tuple(LandmarkPoint(x=lm.x, y=lm.y, z=lm.z) for lm in landmarks)
         label = "Unknown"
         score = 0.0
         if index < len(handedness) and handedness[index]:
             category = handedness[index][0]
             label = category.category_name
             score = float(category.score)
-        hands.append(HandLandmarks(points=points, handedness=label, score=score))
+        hands.append(HandLandmarks(points=_to_points(landmarks), handedness=label, score=score))
     return HandLandmarkResult(hands=tuple(hands))
+
+
+def _to_pose_result(detection: Any) -> PoseLandmarkResult:
+    """Map a MediaPipe ``PoseLandmarkerResult`` to the standardized shape."""
+    poses = tuple(
+        PoseLandmarks(points=_to_points(landmarks)) for landmarks in detection.pose_landmarks
+    )
+    return PoseLandmarkResult(poses=poses)
+
+
+def _to_face_result(detection: Any) -> FaceLandmarkResult:
+    """Map a MediaPipe ``FaceLandmarkerResult`` to the standardized shape."""
+    faces = tuple(
+        FaceLandmarks(points=_to_points(landmarks)) for landmarks in detection.face_landmarks
+    )
+    return FaceLandmarkResult(faces=faces)
+
+
+#: MediaPipeTask → Tasks-API binding. Adding a landmark task is one entry here
+#: plus its standardized result type — the backend class itself is untouched.
+_TASK_BINDINGS: dict[MediaPipeTask, _TaskBinding] = {
+    MediaPipeTask.HAND_LANDMARKS: _TaskBinding(
+        landmarker_name="HandLandmarker",
+        options_name="HandLandmarkerOptions",
+        count_option="num_hands",
+        max_count=_MAX_HANDS,
+        convert=_to_hand_result,
+    ),
+    MediaPipeTask.POSE_LANDMARKS: _TaskBinding(
+        landmarker_name="PoseLandmarker",
+        options_name="PoseLandmarkerOptions",
+        count_option="num_poses",
+        max_count=_MAX_POSES,
+        convert=_to_pose_result,
+    ),
+    MediaPipeTask.FACE_LANDMARKS: _TaskBinding(
+        landmarker_name="FaceLandmarker",
+        options_name="FaceLandmarkerOptions",
+        count_option="num_faces",
+        max_count=_MAX_FACES,
+        convert=_to_face_result,
+    ),
+}

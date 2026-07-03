@@ -8,10 +8,11 @@ frame; the plugin stays decoupled from the runtime that produced them).
 
 Two shapes cover v1:
 
-- Landmark results (:class:`HandLandmarkResult`) — MediaPipe landmark tasks.
-  Coordinates are **normalized** to ``[0, 1]`` over the image, matching
-  MediaPipe's own convention, so a plugin scales them to pixels itself and
-  never depends on the capture resolution baked into the backend.
+- Landmark results (:class:`HandLandmarkResult`, :class:`PoseLandmarkResult`,
+  :class:`FaceLandmarkResult`) — MediaPipe landmark tasks. Coordinates are
+  **normalized** to ``[0, 1]`` over the image, matching MediaPipe's own
+  convention, so a plugin scales them to pixels itself and never depends on
+  the capture resolution baked into the backend.
 - Tensor results (:class:`TensorOutput`) — a generic ONNX model's raw named
   output tensors as plain NumPy arrays. Model-specific post-processing (e.g.
   decoding detection boxes) is a plugin/model concern, not the backend's, so
@@ -29,9 +30,13 @@ from typing import Any
 import numpy.typing as npt
 
 __all__ = [
+    "FaceLandmarkResult",
+    "FaceLandmarks",
     "HandLandmarkResult",
     "HandLandmarks",
     "LandmarkPoint",
+    "PoseLandmarkResult",
+    "PoseLandmarks",
     "TensorOutput",
 ]
 
@@ -92,6 +97,78 @@ class HandLandmarkResult:
     def __len__(self) -> int:
         """Number of hands detected."""
         return len(self.hands)
+
+
+@dataclass(frozen=True, slots=True)
+class PoseLandmarks:
+    """The landmarks of a single detected person.
+
+    Attributes:
+        points: The body landmarks in MediaPipe's canonical order (33 for the
+            pose model), each normalized via :class:`LandmarkPoint`.
+    """
+
+    points: tuple[LandmarkPoint, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class PoseLandmarkResult:
+    """All poses detected in one frame — the ``mediapipe.pose`` result.
+
+    An empty :attr:`poses` tuple is the normal "nobody in view" case, not an
+    error; plugins must handle it as such.
+
+    Attributes:
+        poses: One :class:`PoseLandmarks` per detected person, in the model's
+            detection order. Empty when nothing was detected.
+    """
+
+    poses: tuple[PoseLandmarks, ...] = ()
+
+    @property
+    def is_empty(self) -> bool:
+        """``True`` when no pose was detected in the frame."""
+        return not self.poses
+
+    def __len__(self) -> int:
+        """Number of poses detected."""
+        return len(self.poses)
+
+
+@dataclass(frozen=True, slots=True)
+class FaceLandmarks:
+    """The landmarks of a single detected face.
+
+    Attributes:
+        points: The face-mesh landmarks in MediaPipe's canonical order (478
+            for the face model), each normalized via :class:`LandmarkPoint`.
+    """
+
+    points: tuple[LandmarkPoint, ...]
+
+
+@dataclass(frozen=True, slots=True)
+class FaceLandmarkResult:
+    """All faces detected in one frame — the ``mediapipe.face`` result.
+
+    An empty :attr:`faces` tuple is the normal "no face in view" case, not an
+    error; plugins must handle it as such.
+
+    Attributes:
+        faces: One :class:`FaceLandmarks` per detected face, in the model's
+            detection order. Empty when nothing was detected.
+    """
+
+    faces: tuple[FaceLandmarks, ...] = ()
+
+    @property
+    def is_empty(self) -> bool:
+        """``True`` when no face was detected in the frame."""
+        return not self.faces
+
+    def __len__(self) -> int:
+        """Number of faces detected."""
+        return len(self.faces)
 
 
 @dataclass(frozen=True, slots=True)

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import hashlib
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
@@ -11,12 +12,18 @@ from visionplay.vision.inference.backend_defaults import (
     device_from_config,
     models_dir_from_config,
     register_default_backends,
+    register_mediapipe_face_backend,
     register_mediapipe_hands_backend,
+    register_mediapipe_pose_backend,
     register_onnx_backend,
 )
 from visionplay.vision.inference.backend_manager import BackendManager
 from visionplay.vision.inference.device import DeviceConfig, DeviceType
-from visionplay.vision.inference.model_catalog import HAND_LANDMARKER
+from visionplay.vision.inference.model_catalog import (
+    FACE_LANDMARKER,
+    HAND_LANDMARKER,
+    POSE_LANDMARKER,
+)
 from visionplay.vision.inference.model_registry import (
     ModelDownloader,
     ModelFormat,
@@ -47,45 +54,77 @@ class FakeDownloader(ModelDownloader):
         destination.write_bytes(MODEL_BYTES)
 
 
-class TestMediaPipeHandsRegistration:
-    def test_registers_hands_backend(self, tmp_path: Path) -> None:
-        manager = BackendManager()
-        registry = ModelRegistry(tmp_path)
-        register_mediapipe_hands_backend(manager, registry)
-        assert manager.registered_names() == ("mediapipe.hands",)
+RegisterFn = Callable[[BackendManager, ModelRegistry], None]
 
-    def test_registers_the_model_spec(self, tmp_path: Path) -> None:
-        registry = ModelRegistry(tmp_path)
-        register_mediapipe_hands_backend(BackendManager(), registry)
-        assert registry.get(HAND_LANDMARKER.model_id) == HAND_LANDMARKER
+#: (register function, backend name, catalog spec) per MediaPipe backend.
+MEDIAPIPE_REGISTRATIONS: list[tuple[RegisterFn, str, ModelSpec]] = [
+    (register_mediapipe_hands_backend, "mediapipe.hands", HAND_LANDMARKER),
+    (register_mediapipe_pose_backend, "mediapipe.pose", POSE_LANDMARKER),
+    (register_mediapipe_face_backend, "mediapipe.face", FACE_LANDMARKER),
+]
 
-    def test_registration_constructs_nothing(self, tmp_path: Path) -> None:
+
+@pytest.mark.parametrize(
+    ("register", "name", "default_spec"),
+    MEDIAPIPE_REGISTRATIONS,
+    ids=[name for _, name, _ in MEDIAPIPE_REGISTRATIONS],
+)
+class TestMediaPipeRegistration:
+    def test_registers_backend_under_task_name(
+        self, tmp_path: Path, register: RegisterFn, name: str, default_spec: ModelSpec
+    ) -> None:
         manager = BackendManager()
-        register_mediapipe_hands_backend(manager, ModelRegistry(tmp_path))
+        register(manager, ModelRegistry(tmp_path))
+        assert manager.registered_names() == (name,)
+
+    def test_registers_the_model_spec(
+        self, tmp_path: Path, register: RegisterFn, name: str, default_spec: ModelSpec
+    ) -> None:
+        registry = ModelRegistry(tmp_path)
+        register(BackendManager(), registry)
+        assert registry.get(default_spec.model_id) == default_spec
+
+    def test_registration_constructs_nothing(
+        self, tmp_path: Path, register: RegisterFn, name: str, default_spec: ModelSpec
+    ) -> None:
+        manager = BackendManager()
+        register(manager, ModelRegistry(tmp_path))
         assert manager.loaded_names() == ()
 
     def test_available_when_runtime_present_and_model_registered(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        register: RegisterFn,
+        name: str,
+        default_spec: ModelSpec,
     ) -> None:
         manager = BackendManager()
-        register_mediapipe_hands_backend(manager, ModelRegistry(tmp_path))
+        register(manager, ModelRegistry(tmp_path))
         monkeypatch.setattr(
             "visionplay.vision.inference.backend_defaults._module_importable",
             lambda module_name: module_name == "mediapipe",
         )
-        assert manager.is_available("mediapipe.hands")
+        assert manager.is_available(name)
 
     def test_unavailable_when_runtime_missing(
-        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+        self,
+        tmp_path: Path,
+        monkeypatch: pytest.MonkeyPatch,
+        register: RegisterFn,
+        name: str,
+        default_spec: ModelSpec,
     ) -> None:
         manager = BackendManager()
-        register_mediapipe_hands_backend(manager, ModelRegistry(tmp_path))
+        register(manager, ModelRegistry(tmp_path))
         monkeypatch.setattr(
             "visionplay.vision.inference.backend_defaults._module_importable",
             lambda module_name: False,
         )
-        assert not manager.is_available("mediapipe.hands")
+        assert not manager.is_available(name)
 
+
+class TestMediaPipeCustomSpec:
     def test_custom_spec_is_honored(self, tmp_path: Path) -> None:
         manager = BackendManager()
         registry = ModelRegistry(tmp_path)
@@ -101,10 +140,13 @@ class TestMediaPipeHandsRegistration:
 
 
 class TestRegisterDefaultBackends:
-    def test_registers_mediapipe_hands(self, tmp_path: Path) -> None:
+    def test_registers_all_mediapipe_backends(self, tmp_path: Path) -> None:
         manager = BackendManager()
         register_default_backends(manager, ModelRegistry(tmp_path))
-        assert "mediapipe.hands" in manager.registered_names()
+        names = manager.registered_names()
+        assert "mediapipe.hands" in names
+        assert "mediapipe.pose" in names
+        assert "mediapipe.face" in names
 
 
 class TestOnnxRegistration:

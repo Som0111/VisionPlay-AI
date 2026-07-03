@@ -2,8 +2,8 @@
 
 The configuration/guard tests need no model and run everywhere. The tests that
 actually build a MediaPipe graph and run inference are marked ``integration``
-and use the ``hand_landmarker_model`` fixture, which downloads the real model
-once per session (and skips if the network is unavailable).
+and use the ``*_landmarker_model`` fixtures, which download the real models
+once per session (and skip if the network is unavailable).
 """
 
 from __future__ import annotations
@@ -16,10 +16,16 @@ import pytest
 from visionplay.vision.inference.backend_base import InferenceBackend, InferenceError
 from visionplay.vision.inference.device import DeviceConfig
 from visionplay.vision.inference.mediapipe_backend import MediaPipeBackend, MediaPipeTask
-from visionplay.vision.inference.results import HandLandmarkResult
+from visionplay.vision.inference.results import (
+    FaceLandmarkResult,
+    HandLandmarkResult,
+    PoseLandmarkResult,
+)
 from visionplay.vision.pipeline.frame_types import ColorFormat, Frame
 
 DUMMY_MODEL = Path("nonexistent") / "hand_landmarker.task"
+
+ALL_TASKS = list(MediaPipeTask)
 
 
 def make_frame(color_format: ColorFormat = ColorFormat.BGR) -> Frame:
@@ -33,9 +39,16 @@ class TestConfiguration:
             MediaPipeBackend(MediaPipeTask.HAND_LANDMARKS, DUMMY_MODEL), InferenceBackend
         )
 
-    def test_name_per_task(self) -> None:
-        backend = MediaPipeBackend(MediaPipeTask.HAND_LANDMARKS, DUMMY_MODEL)
-        assert backend.name == "mediapipe.hands"
+    @pytest.mark.parametrize(
+        ("task", "expected"),
+        [
+            (MediaPipeTask.HAND_LANDMARKS, "mediapipe.hands"),
+            (MediaPipeTask.POSE_LANDMARKS, "mediapipe.pose"),
+            (MediaPipeTask.FACE_LANDMARKS, "mediapipe.face"),
+        ],
+    )
+    def test_name_per_task(self, task: MediaPipeTask, expected: str) -> None:
+        assert MediaPipeBackend(task, DUMMY_MODEL).name == expected
 
     def test_default_device_is_cpu(self) -> None:
         backend = MediaPipeBackend(MediaPipeTask.HAND_LANDMARKS, DUMMY_MODEL)
@@ -47,31 +60,28 @@ class TestConfiguration:
         )
         assert backend.delegate == "CPU"
 
-    def test_task_property(self) -> None:
-        backend = MediaPipeBackend(MediaPipeTask.HAND_LANDMARKS, DUMMY_MODEL)
-        assert backend.task is MediaPipeTask.HAND_LANDMARKS
+    @pytest.mark.parametrize("task", ALL_TASKS)
+    def test_task_property(self, task: MediaPipeTask) -> None:
+        assert MediaPipeBackend(task, DUMMY_MODEL).task is task
 
     def test_model_path_property(self) -> None:
         assert MediaPipeBackend(MediaPipeTask.HAND_LANDMARKS, DUMMY_MODEL).model_path == DUMMY_MODEL
 
 
 class TestLoadGuards:
-    def test_not_loaded_initially(self) -> None:
-        assert not MediaPipeBackend(MediaPipeTask.HAND_LANDMARKS, DUMMY_MODEL).is_loaded()
+    @pytest.mark.parametrize("task", ALL_TASKS)
+    def test_not_loaded_initially(self, task: MediaPipeTask) -> None:
+        assert not MediaPipeBackend(task, DUMMY_MODEL).is_loaded()
 
-    def test_infer_before_load_raises(self) -> None:
-        backend = MediaPipeBackend(MediaPipeTask.HAND_LANDMARKS, DUMMY_MODEL)
-        with pytest.raises(InferenceError, match="mediapipe.hands.*not loaded"):
+    @pytest.mark.parametrize("task", ALL_TASKS)
+    def test_infer_before_load_raises(self, task: MediaPipeTask) -> None:
+        backend = MediaPipeBackend(task, DUMMY_MODEL)
+        with pytest.raises(InferenceError, match=f"mediapipe.{task.value}.*not loaded"):
             backend.infer(make_frame())
 
-    @pytest.mark.parametrize("task", [MediaPipeTask.POSE_LANDMARKS, MediaPipeTask.FACE_LANDMARKS])
-    def test_unimplemented_task_load_raises(self, task: MediaPipeTask) -> None:
-        backend = MediaPipeBackend(task, DUMMY_MODEL)
-        with pytest.raises(InferenceError, match="not implemented"):
-            backend.load()
-
-    def test_load_missing_model_file_raises(self, tmp_path: Path) -> None:
-        backend = MediaPipeBackend(MediaPipeTask.HAND_LANDMARKS, tmp_path / "absent.task")
+    @pytest.mark.parametrize("task", ALL_TASKS)
+    def test_load_missing_model_file_raises(self, task: MediaPipeTask, tmp_path: Path) -> None:
+        backend = MediaPipeBackend(task, tmp_path / "absent.task")
         with pytest.raises(InferenceError, match="not found"):
             backend.load()
 
@@ -124,3 +134,37 @@ class TestRealInference:
         finally:
             backend.unload()
         assert isinstance(result, HandLandmarkResult)
+
+
+@pytest.mark.integration
+class TestRealPoseInference:
+    def test_load_and_unload(self, pose_landmarker_model: Path) -> None:
+        backend = MediaPipeBackend(MediaPipeTask.POSE_LANDMARKS, pose_landmarker_model)
+        backend.load()
+        assert backend.is_loaded()
+        backend.unload()
+        assert not backend.is_loaded()
+
+    def test_blank_frame_returns_empty_result(self, pose_landmarker_model: Path) -> None:
+        backend = MediaPipeBackend(MediaPipeTask.POSE_LANDMARKS, pose_landmarker_model)
+        with backend:
+            result = backend.infer(make_frame())
+        assert isinstance(result, PoseLandmarkResult)
+        assert result.is_empty
+
+
+@pytest.mark.integration
+class TestRealFaceInference:
+    def test_load_and_unload(self, face_landmarker_model: Path) -> None:
+        backend = MediaPipeBackend(MediaPipeTask.FACE_LANDMARKS, face_landmarker_model)
+        backend.load()
+        assert backend.is_loaded()
+        backend.unload()
+        assert not backend.is_loaded()
+
+    def test_blank_frame_returns_empty_result(self, face_landmarker_model: Path) -> None:
+        backend = MediaPipeBackend(MediaPipeTask.FACE_LANDMARKS, face_landmarker_model)
+        with backend:
+            result = backend.infer(make_frame())
+        assert isinstance(result, FaceLandmarkResult)
+        assert result.is_empty

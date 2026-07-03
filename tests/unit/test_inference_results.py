@@ -6,9 +6,13 @@ import numpy as np
 import pytest
 
 from visionplay.vision.inference.results import (
+    FaceLandmarkResult,
+    FaceLandmarks,
     HandLandmarkResult,
     HandLandmarks,
     LandmarkPoint,
+    PoseLandmarkResult,
+    PoseLandmarks,
     TensorOutput,
 )
 
@@ -36,6 +40,46 @@ class TestHandLandmarkResult:
         result = HandLandmarkResult()
         with pytest.raises(AttributeError):
             result.hands = ()  # type: ignore[misc]
+
+
+class TestPoseLandmarkResult:
+    def test_default_is_empty(self) -> None:
+        result = PoseLandmarkResult()
+        assert result.is_empty
+        assert len(result) == 0
+        assert result.poses == ()
+
+    def test_populated_reports_poses(self) -> None:
+        pose = PoseLandmarks(points=(LandmarkPoint(0.4, 0.5, 0.0),))
+        result = PoseLandmarkResult(poses=(pose,))
+        assert not result.is_empty
+        assert len(result) == 1
+        assert result.poses[0].points[0].y == pytest.approx(0.5)
+
+    def test_is_frozen(self) -> None:
+        result = PoseLandmarkResult()
+        with pytest.raises(AttributeError):
+            result.poses = ()  # type: ignore[misc]
+
+
+class TestFaceLandmarkResult:
+    def test_default_is_empty(self) -> None:
+        result = FaceLandmarkResult()
+        assert result.is_empty
+        assert len(result) == 0
+        assert result.faces == ()
+
+    def test_populated_reports_faces(self) -> None:
+        face = FaceLandmarks(points=(LandmarkPoint(0.7, 0.3, 0.0),))
+        result = FaceLandmarkResult(faces=(face,))
+        assert not result.is_empty
+        assert len(result) == 1
+        assert result.faces[0].points[0].x == pytest.approx(0.7)
+
+    def test_is_frozen(self) -> None:
+        result = FaceLandmarkResult()
+        with pytest.raises(AttributeError):
+            result.faces = ()  # type: ignore[misc]
 
 
 class TestTensorOutput:

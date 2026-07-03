@@ -33,7 +33,11 @@ from visionplay.vision.inference.backend_manager import (
 )
 from visionplay.vision.inference.device import DeviceConfig
 from visionplay.vision.inference.mediapipe_backend import MediaPipeBackend, MediaPipeTask
-from visionplay.vision.inference.model_catalog import HAND_LANDMARKER
+from visionplay.vision.inference.model_catalog import (
+    FACE_LANDMARKER,
+    HAND_LANDMARKER,
+    POSE_LANDMARKER,
+)
 from visionplay.vision.inference.model_registry import (
     ModelRegistry,
     ModelRegistryError,
@@ -47,7 +51,9 @@ __all__ = [
     "probe_mediapipe",
     "probe_onnxruntime",
     "register_default_backends",
+    "register_mediapipe_face_backend",
     "register_mediapipe_hands_backend",
+    "register_mediapipe_pose_backend",
     "register_onnx_backend",
 ]
 
@@ -82,33 +88,28 @@ def probe_onnxruntime() -> bool:
     return _module_importable(_ONNXRUNTIME_MODULE)
 
 
-def register_mediapipe_hands_backend(
+def _register_mediapipe_backend(
     manager: BackendManager,
     model_registry: ModelRegistry,
-    spec: ModelSpec = HAND_LANDMARKER,
+    task: MediaPipeTask,
+    spec: ModelSpec,
 ) -> None:
-    """Register the MediaPipe hand-landmark backend on ``manager``.
+    """Register one MediaPipe landmark backend on ``manager``.
 
     The model spec is registered in ``model_registry``, and the backend is
-    exposed under ``"mediapipe.hands"``. The factory resolves the model to a
+    exposed under ``"mediapipe.<task>"``. The factory resolves the model to a
     verified local path via
     :meth:`~visionplay.vision.inference.model_registry.ModelRegistry.ensure`
     at acquire time — downloading on first use, never at registration or per
     frame. The probe requires both the MediaPipe runtime and the model being
     registered, mirroring the ONNX backend so capability negotiation is
     uniform across runtimes.
-
-    Args:
-        manager: The manager to populate.
-        model_registry: Catalog/cache the model is resolved through.
-        spec: The hand-landmarker model to run. Defaults to the bundled
-            :data:`~visionplay.vision.inference.model_catalog.HAND_LANDMARKER`.
     """
     model_registry.register(spec)
 
     def factory(device: DeviceConfig) -> MediaPipeBackend:
         model_path = model_registry.ensure(spec)
-        return MediaPipeBackend(MediaPipeTask.HAND_LANDMARKS, model_path, device)
+        return MediaPipeBackend(task, model_path, device)
 
     def probe() -> bool:
         if not probe_mediapipe():
@@ -119,21 +120,73 @@ def register_mediapipe_hands_backend(
             return False
         return True
 
-    manager.register(BackendRegistration(name="mediapipe.hands", factory=factory, probe=probe))
+    manager.register(
+        BackendRegistration(name=f"mediapipe.{task.value}", factory=factory, probe=probe)
+    )
+
+
+def register_mediapipe_hands_backend(
+    manager: BackendManager,
+    model_registry: ModelRegistry,
+    spec: ModelSpec = HAND_LANDMARKER,
+) -> None:
+    """Register the MediaPipe hand-landmark backend as ``"mediapipe.hands"``.
+
+    Args:
+        manager: The manager to populate.
+        model_registry: Catalog/cache the model is resolved through.
+        spec: The hand-landmarker model to run. Defaults to the bundled
+            :data:`~visionplay.vision.inference.model_catalog.HAND_LANDMARKER`.
+    """
+    _register_mediapipe_backend(manager, model_registry, MediaPipeTask.HAND_LANDMARKS, spec)
+
+
+def register_mediapipe_pose_backend(
+    manager: BackendManager,
+    model_registry: ModelRegistry,
+    spec: ModelSpec = POSE_LANDMARKER,
+) -> None:
+    """Register the MediaPipe pose-landmark backend as ``"mediapipe.pose"``.
+
+    Args:
+        manager: The manager to populate.
+        model_registry: Catalog/cache the model is resolved through.
+        spec: The pose-landmarker model to run. Defaults to the bundled
+            :data:`~visionplay.vision.inference.model_catalog.POSE_LANDMARKER`.
+    """
+    _register_mediapipe_backend(manager, model_registry, MediaPipeTask.POSE_LANDMARKS, spec)
+
+
+def register_mediapipe_face_backend(
+    manager: BackendManager,
+    model_registry: ModelRegistry,
+    spec: ModelSpec = FACE_LANDMARKER,
+) -> None:
+    """Register the MediaPipe face-landmark backend as ``"mediapipe.face"``.
+
+    Args:
+        manager: The manager to populate.
+        model_registry: Catalog/cache the model is resolved through.
+        spec: The face-landmarker model to run. Defaults to the bundled
+            :data:`~visionplay.vision.inference.model_catalog.FACE_LANDMARKER`.
+    """
+    _register_mediapipe_backend(manager, model_registry, MediaPipeTask.FACE_LANDMARKS, spec)
 
 
 def register_default_backends(manager: BackendManager, model_registry: ModelRegistry) -> None:
     """Register every built-in backend VisionPlay ships with, on ``manager``.
 
     The single entry point the app bootstrap (M2.3) calls to wire the standard
-    backend set. Currently the MediaPipe hand-landmark backend; new built-ins
-    are added here as they gain real implementations.
+    backend set: the MediaPipe hand, pose, and face landmark backends. New
+    built-ins are added here as they gain real implementations.
 
     Args:
         manager: The manager to populate.
         model_registry: Catalog/cache built-in models are resolved through.
     """
     register_mediapipe_hands_backend(manager, model_registry)
+    register_mediapipe_pose_backend(manager, model_registry)
+    register_mediapipe_face_backend(manager, model_registry)
 
 
 def register_onnx_backend(
