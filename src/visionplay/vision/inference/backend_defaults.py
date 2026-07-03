@@ -28,12 +28,12 @@ from pathlib import Path
 from typing import Any
 
 from visionplay.vision.inference.backend_manager import (
-    BackendFactory,
     BackendManager,
     BackendRegistration,
 )
 from visionplay.vision.inference.device import DeviceConfig
 from visionplay.vision.inference.mediapipe_backend import MediaPipeBackend, MediaPipeTask
+from visionplay.vision.inference.model_catalog import HAND_LANDMARKER
 from visionplay.vision.inference.model_registry import (
     ModelRegistry,
     ModelRegistryError,
@@ -46,7 +46,8 @@ __all__ = [
     "models_dir_from_config",
     "probe_mediapipe",
     "probe_onnxruntime",
-    "register_builtin_mediapipe_backends",
+    "register_default_backends",
+    "register_mediapipe_hands_backend",
     "register_onnx_backend",
 ]
 
@@ -81,49 +82,58 @@ def probe_onnxruntime() -> bool:
     return _module_importable(_ONNXRUNTIME_MODULE)
 
 
-def _make_mediapipe_factory(task: MediaPipeTask) -> BackendFactory:
-    """Build a factory that constructs a :class:`MediaPipeBackend` for ``task``.
+def register_mediapipe_hands_backend(
+    manager: BackendManager,
+    model_registry: ModelRegistry,
+    spec: ModelSpec = HAND_LANDMARKER,
+) -> None:
+    """Register the MediaPipe hand-landmark backend on ``manager``.
 
-    A helper (rather than an inline lambda) so ``task`` is bound per call and
-    not captured by reference in a loop.
-    """
-
-    def factory(device: DeviceConfig) -> MediaPipeBackend:
-        return MediaPipeBackend(task, device)
-
-    return factory
-
-
-#: One factory per landmark task, built once at import so that repeated
-#: :func:`register_builtin_mediapipe_backends` calls produce *equal*
-#: registrations — which the manager treats as an idempotent no-op rather than
-#: a conflict (per-call closures would have distinct identities and clash).
-_MEDIAPIPE_FACTORIES: dict[MediaPipeTask, BackendFactory] = {
-    task: _make_mediapipe_factory(task) for task in MediaPipeTask
-}
-
-
-def register_builtin_mediapipe_backends(manager: BackendManager) -> None:
-    """Register the standard MediaPipe landmark backends on ``manager``.
-
-    Registers one backend per :class:`MediaPipeTask` (hands/pose/face) under
-    its ``"mediapipe.<task>"`` name, each probed on the MediaPipe runtime
-    being importable. Registration is cheap and constructs nothing — the
-    backends are built lazily on first
-    :meth:`~visionplay.vision.inference.backend_manager.BackendManager.acquire`.
-    Idempotent: calling it twice on the same manager is a no-op.
+    The model spec is registered in ``model_registry``, and the backend is
+    exposed under ``"mediapipe.hands"``. The factory resolves the model to a
+    verified local path via
+    :meth:`~visionplay.vision.inference.model_registry.ModelRegistry.ensure`
+    at acquire time — downloading on first use, never at registration or per
+    frame. The probe requires both the MediaPipe runtime and the model being
+    registered, mirroring the ONNX backend so capability negotiation is
+    uniform across runtimes.
 
     Args:
         manager: The manager to populate.
+        model_registry: Catalog/cache the model is resolved through.
+        spec: The hand-landmarker model to run. Defaults to the bundled
+            :data:`~visionplay.vision.inference.model_catalog.HAND_LANDMARKER`.
     """
-    for task in MediaPipeTask:
-        manager.register(
-            BackendRegistration(
-                name=f"mediapipe.{task.value}",
-                factory=_MEDIAPIPE_FACTORIES[task],
-                probe=probe_mediapipe,
-            )
-        )
+    model_registry.register(spec)
+
+    def factory(device: DeviceConfig) -> MediaPipeBackend:
+        model_path = model_registry.ensure(spec)
+        return MediaPipeBackend(MediaPipeTask.HAND_LANDMARKS, model_path, device)
+
+    def probe() -> bool:
+        if not probe_mediapipe():
+            return False
+        try:
+            model_registry.get(spec.model_id)
+        except ModelRegistryError:
+            return False
+        return True
+
+    manager.register(BackendRegistration(name="mediapipe.hands", factory=factory, probe=probe))
+
+
+def register_default_backends(manager: BackendManager, model_registry: ModelRegistry) -> None:
+    """Register every built-in backend VisionPlay ships with, on ``manager``.
+
+    The single entry point the app bootstrap (M2.3) calls to wire the standard
+    backend set. Currently the MediaPipe hand-landmark backend; new built-ins
+    are added here as they gain real implementations.
+
+    Args:
+        manager: The manager to populate.
+        model_registry: Catalog/cache built-in models are resolved through.
+    """
+    register_mediapipe_hands_backend(manager, model_registry)
 
 
 def register_onnx_backend(

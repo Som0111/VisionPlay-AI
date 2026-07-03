@@ -6,25 +6,29 @@ format, source URL, SHA-256 — and :class:`ModelRegistry` materializes it
 into the local cache (``AppPaths.models_dir``) on first use, verifying the
 checksum before anything downstream ever sees the file.
 
-Models are tagged by **format** (:class:`ModelFormat`: ``onnx``/``tflite``),
-never by device — device selection is a runtime backend concern
+Models are tagged by **format** (:class:`ModelFormat`: ``onnx``/``tflite``/
+``task``), never by device — device selection is a runtime backend concern
 (``docs/architecture.md`` §5), so this registry needs no changes when GPU
 support lands.
 
 The actual network transfer sits behind the :class:`ModelDownloader`
-abstraction. Phase 0 ships no real downloader — tests inject fakes, and the
-HTTP implementation arrives with the first real model in Phase 2.
+abstraction: tests inject in-memory fakes, while :class:`HttpModelDownloader`
+(added in Phase 2) fetches over HTTP(S). The registry itself never touches the
+network — it only orchestrates caching, verification, and atomic placement.
 """
 
 from __future__ import annotations
 
 import hashlib
+import shutil
+import urllib.request
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
 
 __all__ = [
+    "HttpModelDownloader",
     "ModelDownloader",
     "ModelFormat",
     "ModelRegistry",
@@ -34,6 +38,9 @@ __all__ = [
 
 #: Bytes per read when hashing a model file (models are large; never slurp).
 _HASH_CHUNK_SIZE: int = 1 << 20
+
+#: Seconds to wait for the HTTP connection before giving up on a download.
+_HTTP_TIMEOUT_SECONDS: float = 30.0
 
 
 class ModelRegistryError(Exception):
@@ -53,6 +60,11 @@ class ModelFormat(Enum):
 
     ONNX = "onnx"
     TFLITE = "tflite"
+    #: MediaPipe Tasks bundle (``.task``) — a self-contained model asset the
+    #: MediaPipe Tasks API loads via ``model_asset_path``. Tagged as its own
+    #: format for the same reason as the others: the registry caches bytes and
+    #: verifies a checksum; what *runs* the bytes is the backend's concern.
+    TASK = "task"
 
 
 @dataclass(frozen=True, slots=True)
@@ -118,6 +130,51 @@ class ModelDownloader(ABC):
                 partial file masquerading as complete — the registry
                 verifies checksums, but failures should still be loud.
         """
+
+
+class HttpModelDownloader(ModelDownloader):
+    """Fetches a model artifact over HTTP(S) with :mod:`urllib`.
+
+    Deliberately minimal, matching the :class:`ModelDownloader` contract: it
+    only streams bytes to ``destination``. The :class:`ModelRegistry` owns
+    caching, checksum verification, and atomic placement — this class does
+    not verify anything itself, since the registry re-hashes the result
+    regardless. Streaming (rather than reading the whole body into memory)
+    keeps large models from spiking memory.
+    """
+
+    def __init__(self, timeout: float = _HTTP_TIMEOUT_SECONDS) -> None:
+        """Create a downloader.
+
+        Args:
+            timeout: Per-connection timeout in seconds for the HTTP request.
+        """
+        self._timeout = timeout
+
+    def download(self, url: str, destination: Path) -> None:
+        """Stream ``url`` to ``destination``.
+
+        Args:
+            url: Source location of the artifact (``http``/``https``).
+            destination: File to write. Its parent directory already exists.
+
+        Raises:
+            ModelRegistryError: If the request or write fails — the message
+                names the URL so a user can diagnose it. The registry cleans
+                up the partial file on failure, so nothing loud-but-partial
+                is left behind by the caller.
+        """
+        try:
+            request = urllib.request.Request(url, headers={"User-Agent": "VisionPlay"})
+            with (
+                urllib.request.urlopen(request, timeout=self._timeout) as response,
+                destination.open("wb") as handle,
+            ):
+                shutil.copyfileobj(response, handle)
+        except OSError as exc:
+            # urllib raises URLError (an OSError) on network failure; file I/O
+            # raises OSError too. Either way, surface a user-presentable error.
+            raise ModelRegistryError(f"Failed to download model from {url}: {exc}") from exc
 
 
 class ModelRegistry:

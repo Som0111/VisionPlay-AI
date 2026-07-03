@@ -1,11 +1,16 @@
 """Unit tests for visionplay.vision.inference.model_registry."""
 
 import hashlib
+import http.server
+import threading
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 import pytest
 
 from visionplay.vision.inference.model_registry import (
+    HttpModelDownloader,
     ModelDownloader,
     ModelFormat,
     ModelRegistry,
@@ -154,3 +159,88 @@ class TestIsCached:
 
 def test_model_registry_error_is_exception() -> None:
     assert issubclass(ModelRegistryError, Exception)
+
+
+class TestModelFormat:
+    def test_task_format_exists(self) -> None:
+        assert ModelFormat.TASK.value == "task"
+
+    def test_task_spec_constructs(self) -> None:
+        spec = ModelSpec(
+            model_id="hand_landmarker",
+            format=ModelFormat.TASK,
+            url="https://example.invalid/hand_landmarker.task",
+            sha256=MODEL_SHA256,
+            filename="hand_landmarker.task",
+        )
+        assert spec.format is ModelFormat.TASK
+
+
+@contextmanager
+def local_http_server(payload: bytes) -> Iterator[str]:
+    """Serve ``payload`` for any GET on a background HTTP server; yield its URL."""
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802 (http.server API name)
+            self.send_response(200)
+            self.send_header("Content-Length", str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
+        def log_message(self, *args: object) -> None:
+            pass  # keep test output quiet
+
+    server = http.server.HTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        host, port = server.server_address[:2]
+        yield f"http://{host}:{port}/model.bin"
+    finally:
+        server.shutdown()
+        thread.join()
+        server.server_close()
+
+
+class TestHttpModelDownloader:
+    def test_downloads_bytes_to_destination(self, tmp_path: Path) -> None:
+        dest = tmp_path / "out.bin"
+        with local_http_server(MODEL_BYTES) as url:
+            HttpModelDownloader().download(url, dest)
+        assert dest.read_bytes() == MODEL_BYTES
+
+    def test_connection_failure_raises_registry_error(self, tmp_path: Path) -> None:
+        # Nothing is listening on this port after the server closes.
+        with local_http_server(MODEL_BYTES) as url:
+            dead_url = url
+        with pytest.raises(ModelRegistryError, match="Failed to download"):
+            HttpModelDownloader(timeout=1.0).download(dead_url, tmp_path / "out.bin")
+
+    def test_end_to_end_ensure_with_real_downloader(self, tmp_path: Path) -> None:
+        spec = make_spec()
+        with local_http_server(MODEL_BYTES) as url:
+            spec = ModelSpec(
+                model_id=spec.model_id,
+                format=spec.format,
+                url=url,
+                sha256=MODEL_SHA256,
+                filename=spec.filename,
+            )
+            registry = ModelRegistry(tmp_path / "models", HttpModelDownloader())
+            path = registry.ensure(spec)
+        assert path.read_bytes() == MODEL_BYTES
+        assert registry.is_cached(spec)
+
+    def test_checksum_mismatch_from_real_downloader_rejected(self, tmp_path: Path) -> None:
+        with local_http_server(b"tampered payload") as url:
+            spec = ModelSpec(
+                model_id="yolo_nano",
+                format=ModelFormat.ONNX,
+                url=url,
+                sha256=MODEL_SHA256,  # does not match the served bytes
+                filename="yolo_nano.onnx",
+            )
+            registry = ModelRegistry(tmp_path, HttpModelDownloader())
+            with pytest.raises(ModelRegistryError, match="Checksum mismatch"):
+                registry.ensure(spec)
+        assert list(tmp_path.iterdir()) == []  # nothing partial left behind

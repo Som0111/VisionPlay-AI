@@ -10,11 +10,13 @@ import pytest
 from visionplay.vision.inference.backend_defaults import (
     device_from_config,
     models_dir_from_config,
-    register_builtin_mediapipe_backends,
+    register_default_backends,
+    register_mediapipe_hands_backend,
     register_onnx_backend,
 )
 from visionplay.vision.inference.backend_manager import BackendManager
 from visionplay.vision.inference.device import DeviceConfig, DeviceType
+from visionplay.vision.inference.model_catalog import HAND_LANDMARKER
 from visionplay.vision.inference.model_registry import (
     ModelDownloader,
     ModelFormat,
@@ -45,44 +47,64 @@ class FakeDownloader(ModelDownloader):
         destination.write_bytes(MODEL_BYTES)
 
 
-class TestMediaPipeRegistration:
-    def test_registers_all_three_landmark_backends(self) -> None:
+class TestMediaPipeHandsRegistration:
+    def test_registers_hands_backend(self, tmp_path: Path) -> None:
         manager = BackendManager()
-        register_builtin_mediapipe_backends(manager)
-        assert set(manager.registered_names()) == {
-            "mediapipe.hands",
-            "mediapipe.pose",
-            "mediapipe.face",
-        }
+        registry = ModelRegistry(tmp_path)
+        register_mediapipe_hands_backend(manager, registry)
+        assert manager.registered_names() == ("mediapipe.hands",)
 
-    def test_registration_constructs_nothing(self) -> None:
+    def test_registers_the_model_spec(self, tmp_path: Path) -> None:
+        registry = ModelRegistry(tmp_path)
+        register_mediapipe_hands_backend(BackendManager(), registry)
+        assert registry.get(HAND_LANDMARKER.model_id) == HAND_LANDMARKER
+
+    def test_registration_constructs_nothing(self, tmp_path: Path) -> None:
         manager = BackendManager()
-        register_builtin_mediapipe_backends(manager)
+        register_mediapipe_hands_backend(manager, ModelRegistry(tmp_path))
         assert manager.loaded_names() == ()
 
-    def test_availability_tracks_the_mediapipe_probe(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_available_when_runtime_present_and_model_registered(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         manager = BackendManager()
-        register_builtin_mediapipe_backends(manager)
+        register_mediapipe_hands_backend(manager, ModelRegistry(tmp_path))
         monkeypatch.setattr(
             "visionplay.vision.inference.backend_defaults._module_importable",
             lambda module_name: module_name == "mediapipe",
         )
         assert manager.is_available("mediapipe.hands")
 
-    def test_unavailable_when_runtime_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_unavailable_when_runtime_missing(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         manager = BackendManager()
-        register_builtin_mediapipe_backends(manager)
+        register_mediapipe_hands_backend(manager, ModelRegistry(tmp_path))
         monkeypatch.setattr(
             "visionplay.vision.inference.backend_defaults._module_importable",
             lambda module_name: False,
         )
         assert not manager.is_available("mediapipe.hands")
 
-    def test_idempotent_registration(self) -> None:
+    def test_custom_spec_is_honored(self, tmp_path: Path) -> None:
         manager = BackendManager()
-        register_builtin_mediapipe_backends(manager)
-        register_builtin_mediapipe_backends(manager)  # same registrations -> no-op
-        assert len(manager.registered_names()) == 3
+        registry = ModelRegistry(tmp_path)
+        spec = ModelSpec(
+            model_id="hand_landmarker",
+            format=ModelFormat.TASK,
+            url="https://example.invalid/hand.task",
+            sha256="b" * 64,
+            filename="hand.task",
+        )
+        register_mediapipe_hands_backend(manager, registry, spec)
+        assert registry.get("hand_landmarker") == spec
+
+
+class TestRegisterDefaultBackends:
+    def test_registers_mediapipe_hands(self, tmp_path: Path) -> None:
+        manager = BackendManager()
+        register_default_backends(manager, ModelRegistry(tmp_path))
+        assert "mediapipe.hands" in manager.registered_names()
 
 
 class TestOnnxRegistration:
