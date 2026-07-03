@@ -1,4 +1,4 @@
-"""Launcher/dashboard widget: lists discovered apps, signals launch intent (M1.5).
+"""Launcher/dashboard widget: lists discovered apps, signals launch intent (M1.5, M2.3).
 
 Populated from a plain ``{app_id: AppManifest}`` mapping — typically
 :attr:`~visionplay.core.plugin_registry.PluginRegistry.manifests` — rather
@@ -10,15 +10,20 @@ frame pipeline) is the application bootstrap's job (M1.6,
 ``docs/architecture.md`` §3 — the launcher signals intent, it does not
 own app lifecycle).
 
-Capability negotiation — greying out apps whose ``required_backends``
-aren't satisfied — is explicitly Phase 2 (``docs/roadmap.md``: "capability
-negotiation in launcher" is a Phase 2 line item). Every discovered app
-renders as launchable here.
+Capability negotiation (M2.3): each app's ``required_backends`` are checked
+against an injected availability predicate — in production
+``BackendManager.is_available`` (``docs/architecture.md`` §4), injected the
+same decoupled way as the manifests mapping so the widget never imports
+``BackendManager`` either. An app with an unsatisfiable backend renders
+disabled/greyed-out (with a tooltip naming what's missing) and never emits
+:attr:`LauncherWidget.app_launch_requested`, replacing the
+"every app renders as launchable" behavior explicitly deferred from M1.5.
+With no predicate set, everything is treated as available.
 """
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QIcon
@@ -26,7 +31,12 @@ from PySide6.QtWidgets import QComboBox, QTreeWidget, QTreeWidgetItem, QVBoxLayo
 
 from visionplay.core.plugin_base import AppManifest
 
-__all__ = ["LauncherWidget"]
+__all__ = ["BackendAvailability", "LauncherWidget"]
+
+#: Answers "can this backend name run right now?" — in production
+#: ``BackendManager.is_available``, which never raises; any predicate
+#: supplied here must honor that same no-raise contract.
+BackendAvailability = Callable[[str], bool]
 
 #: Category-filter option meaning "show every category".
 ALL_CATEGORIES: str = "All Categories"
@@ -51,10 +61,22 @@ class LauncherWidget(QWidget):
         self,
         manifests: Mapping[str, AppManifest] | None = None,
         parent: QWidget | None = None,
+        *,
+        backend_available: BackendAvailability | None = None,
     ) -> None:
-        """Build the widget, optionally pre-populated with ``manifests``."""
+        """Build the widget, optionally pre-populated with ``manifests``.
+
+        Args:
+            manifests: Apps to display initially, keyed by id.
+            parent: Standard Qt parent widget.
+            backend_available: Per-backend availability predicate for
+                capability negotiation (production:
+                ``BackendManager.is_available``). ``None`` treats every
+                backend as available — all apps render launchable.
+        """
         super().__init__(parent)
         self._manifests: dict[str, AppManifest] = {}
+        self._backend_available = backend_available
 
         self._category_filter = QComboBox()
         self._category_filter.currentTextChanged.connect(self._apply_category_filter)
@@ -86,6 +108,35 @@ class LauncherWidget(QWidget):
         self._rebuild_category_filter()
         self._rebuild_tree()
 
+    def set_backend_availability(self, backend_available: BackendAvailability | None) -> None:
+        """Install (or clear) the capability-negotiation predicate and re-render.
+
+        Args:
+            backend_available: Per-backend availability predicate, or ``None``
+                to treat every backend as available again.
+        """
+        self._backend_available = backend_available
+        self._rebuild_tree()
+
+    def is_app_launchable(self, app_id: str) -> bool:
+        """Return ``True`` if the app's ``required_backends`` are all available.
+
+        Args:
+            app_id: Id of a displayed app.
+
+        Raises:
+            KeyError: If ``app_id`` is not among the displayed apps.
+        """
+        return not self._missing_backends(self._manifests[app_id])
+
+    def _missing_backends(self, manifest: AppManifest) -> tuple[str, ...]:
+        """Return the manifest's declared backends the predicate reports missing."""
+        if self._backend_available is None:
+            return ()
+        return tuple(
+            name for name in manifest.required_backends if not self._backend_available(name)
+        )
+
     def _rebuild_category_filter(self) -> None:
         """Repopulate the category dropdown, keeping the current choice if valid."""
         categories = sorted({manifest.category for manifest in self._manifests.values()})
@@ -115,6 +166,15 @@ class LauncherWidget(QWidget):
                 app_item.setData(0, _APP_ID_ROLE, manifest.id)
                 if manifest.icon:
                     app_item.setIcon(0, QIcon(manifest.icon))
+                missing = self._missing_backends(manifest)
+                if missing:
+                    # Capability negotiation (M2.3): unsatisfiable apps render
+                    # greyed-out and unselectable instead of crashing at launch.
+                    app_item.setFlags(
+                        app_item.flags()
+                        & ~(Qt.ItemFlag.ItemIsEnabled | Qt.ItemFlag.ItemIsSelectable)
+                    )
+                    app_item.setToolTip(0, f"Unavailable — missing backends: {', '.join(missing)}")
                 category_item.addChild(app_item)
 
         self._tree.expandAll()
@@ -128,7 +188,13 @@ class LauncherWidget(QWidget):
             item.setHidden(not show_all and item.text(0) != category)
 
     def _on_item_activated(self, item: QTreeWidgetItem, column: int) -> None:
-        """Emit ``app_launch_requested`` for an activated app row; ignore category headers."""
+        """Emit ``app_launch_requested`` for an activated app row.
+
+        Category headers and greyed-out (capability-unsatisfied) apps never
+        emit — the disabled flag already blocks normal UI activation, but the
+        explicit guard also covers programmatic ``itemActivated`` emission.
+        """
         app_id = item.data(0, _APP_ID_ROLE)
-        if app_id is not None:
-            self.app_launch_requested.emit(app_id)
+        if app_id is None or not item.flags() & Qt.ItemFlag.ItemIsEnabled:
+            return
+        self.app_launch_requested.emit(app_id)

@@ -15,16 +15,19 @@ Two pieces, matching ``docs/architecture.md`` §4:
   :class:`~visionplay.core.events.FrameReadyEvent` metadata on the
   :class:`~visionplay.core.event_bus.EventBus`.
 
-Frame processor seam (M1.4, ``docs/architecture.md`` §4 data flow): between
-capture and publish, the worker passes each frame through a settable
-``Callable[[Frame], Frame]`` — in production the plugin registry's
+Frame processor seam (M1.4, filled in by M2.3; ``docs/architecture.md`` §4
+data flow): between capture and publish, the worker passes each frame
+through a settable ``Callable[[Frame], Frame]`` — in production the hook
+composed in ``app.py`` that first runs the active app's inference backends
+(the :class:`~visionplay.vision.inference.inference_runner.FrameInferenceRunner`,
+populating ``frame.results``) and then the plugin registry's
 ``process_frame``, which dispatches to the active app's ``on_frame`` under
 the registry's own guard. The pipeline deliberately adds **no** try/except
-of its own around this call: containment policy (log, count consecutive
-failures, stop the app) lives in one place, the registry (M1.2), and the
-processor contract here is simply "must not raise". With no processor set
-(or ``None``), captured frames pass through unchanged — the M0.5/M0.6
-behavior.
+of its own around this call: containment policy lives in the stages
+themselves (the inference runner for backend failures, the registry for
+plugin failures — M1.2/M2.3), and the processor contract here is simply
+"must not raise". With no processor set (or ``None``), captured frames pass
+through unchanged — the M0.5/M0.6 behavior.
 
 Threading contract: the camera source is touched **only** by the worker
 thread. Consumers interact with the pipeline through :class:`FrameBus`

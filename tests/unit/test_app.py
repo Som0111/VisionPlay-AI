@@ -21,11 +21,18 @@ from tests.fixtures.plugin_apps_fixture._support import RecordingPlugin
 from visionplay.app import VisionPlayApp
 from visionplay.core.paths import AppPaths
 from visionplay.vision.camera.camera_source import CameraError, CameraSource
+from visionplay.vision.inference.backend_base import InferenceBackend, InferenceError
+from visionplay.vision.inference.backend_manager import BackendManager, BackendRegistration
 from visionplay.vision.pipeline.frame_types import Frame
 
 #: Fixture apps package (M1.2) used to test launcher->registry->pipeline
 #: wiring without depending on any real app existing under visionplay.apps.
 FIXTURE_APPS_PACKAGE = "tests.fixtures.plugin_apps_fixture"
+
+#: Fixture apps package (M2.3A) with an app that declares a backend, used to
+#: prove inference results reach on_frame — isolated so it can't perturb the
+#: plugin-registry tests that assert on FIXTURE_APPS_PACKAGE.
+BACKEND_APPS_PACKAGE = "tests.fixtures.backend_apps_fixture"
 
 
 def wait_until(predicate: Callable[[], bool], timeout: float = 5.0) -> bool:
@@ -262,3 +269,165 @@ class TestLauncherIntegration:
         assert app.registry.active_app_id is None
         assert "on_stop" in plugin.calls
         assert not app.pipeline.is_running()
+
+
+class _FakeHandsBackend(InferenceBackend):
+    """Test backend that reports a fixed result under name ``fake.hands``."""
+
+    def __init__(self, device: object | None = None, *, fail_infer: bool = False) -> None:
+        super().__init__()
+        self._loaded = False
+        self._fail_infer = fail_infer
+
+    @property
+    def name(self) -> str:
+        return "fake.hands"
+
+    def load(self) -> None:
+        self._loaded = True
+
+    def infer(self, frame: Frame) -> str:
+        if self._fail_infer:
+            raise InferenceError("fake.hands inference failure (fixture)")
+        return "HANDS"
+
+    def unload(self) -> None:
+        self._loaded = False
+
+    def is_loaded(self) -> bool:
+        return self._loaded
+
+
+def _manager_with_fake_hands(*, fail_infer: bool = False) -> BackendManager:
+    manager = BackendManager()
+    manager.register(
+        BackendRegistration(
+            name="fake.hands",
+            factory=lambda device: _FakeHandsBackend(device, fail_infer=fail_infer),
+            probe=lambda: True,
+        )
+    )
+    return manager
+
+
+class TestInferenceIntegration:
+    """M2.3A: active app's backends run before on_frame; results reach the plugin."""
+
+    def test_default_backend_manager_registers_mediapipe_hands(
+        self, qapp: QApplication, tmp_path: Path
+    ) -> None:
+        app = VisionPlayApp(AppPaths.for_root(tmp_path), source=FakeSource())
+        assert app.backend_manager.is_registered("mediapipe.hands")
+        app.shutdown()
+
+    def test_backend_results_reach_on_frame(self, qapp: QApplication, tmp_path: Path) -> None:
+        app = VisionPlayApp(
+            AppPaths.for_root(tmp_path),
+            source=FakeSource(),
+            apps_package=BACKEND_APPS_PACKAGE,
+            backend_manager=_manager_with_fake_hands(),
+        )
+        window = app.start()
+
+        window.launcher.app_launch_requested.emit("results_app")
+        plugin = app.registry._apps["results_app"].plugin
+
+        # The backend runs on the worker thread before on_frame, so the plugin
+        # sees fake.hands already populated in frame.results.
+        assert wait_until(lambda: any(r.get("fake.hands") == "HANDS" for r in plugin.seen_results))
+        assert app.backend_manager.is_loaded("fake.hands")
+        app.shutdown()
+
+    def test_no_backend_app_leaves_results_empty(self, qapp: QApplication, tmp_path: Path) -> None:
+        app = VisionPlayApp(
+            AppPaths.for_root(tmp_path),
+            source=FakeSource(),
+            apps_package=FIXTURE_APPS_PACKAGE,
+            backend_manager=_manager_with_fake_hands(),
+        )
+        window = app.start()
+
+        window.launcher.app_launch_requested.emit("valid_app")
+        plugin = app.registry._apps["valid_app"].plugin
+        assert isinstance(plugin, RecordingPlugin)
+        assert wait_until(lambda: "on_frame" in plugin.calls)
+        # valid_app declares no backends, so nothing is activated or loaded.
+        assert app.registry.active_app_id == "valid_app"
+        assert not app.backend_manager.is_loaded("fake.hands")
+        app.shutdown()
+
+    def test_backend_infer_failure_is_contained_end_to_end(
+        self, qapp: QApplication, tmp_path: Path
+    ) -> None:
+        """A backend raising InferenceError per frame never crashes the pipeline.
+
+        Extends the M1.2/M1.4 failure-containment tests with a real backend
+        failure instead of a plugin failure: the app keeps receiving frames
+        (with the failed backend's result simply absent) and capture stays up.
+        """
+        app = VisionPlayApp(
+            AppPaths.for_root(tmp_path),
+            source=FakeSource(),
+            apps_package=BACKEND_APPS_PACKAGE,
+            backend_manager=_manager_with_fake_hands(fail_infer=True),
+        )
+        window = app.start()
+
+        window.launcher.app_launch_requested.emit("results_app")
+        plugin = app.registry._apps["results_app"].plugin
+
+        # on_frame keeps running across many frames despite every infer raising.
+        assert wait_until(lambda: len(plugin.seen_results) >= 5)
+        assert all("fake.hands" not in results for results in plugin.seen_results)
+        assert app.pipeline.is_running()
+        assert app.registry.active_app_id == "results_app"
+        app.shutdown()
+
+
+class TestCapabilityNegotiation:
+    """M2.3B: launcher greys out apps whose required_backends aren't available."""
+
+    @pytest.fixture
+    def negotiating_app(self, qapp: QApplication, tmp_path: Path) -> Iterator[VisionPlayApp]:
+        """An app over the backend fixture package: fake.hands available, missing.backend not."""
+        instance = VisionPlayApp(
+            AppPaths.for_root(tmp_path),
+            source=FakeSource(),
+            apps_package=BACKEND_APPS_PACKAGE,
+            backend_manager=_manager_with_fake_hands(),
+        )
+        yield instance
+        instance.shutdown()
+
+    def test_unavailable_app_renders_greyed_out(self, negotiating_app: VisionPlayApp) -> None:
+        window = negotiating_app.start()
+        assert not window.launcher.is_app_launchable("unavailable_app")
+        assert window.launcher.is_app_launchable("results_app")
+
+    def test_launch_of_unavailable_app_is_refused(self, negotiating_app: VisionPlayApp) -> None:
+        window = negotiating_app.start()
+
+        # The launcher itself never emits for a greyed-out item; emitting
+        # programmatically exercises the bootstrap's own capability guard.
+        window.launcher.app_launch_requested.emit("unavailable_app")
+
+        assert negotiating_app.registry.active_app_id is None
+        plugin = negotiating_app.registry._apps["unavailable_app"].plugin
+        assert "on_start" not in plugin.calls
+
+    def test_available_app_still_launches(self, negotiating_app: VisionPlayApp) -> None:
+        window = negotiating_app.start()
+        window.launcher.app_launch_requested.emit("results_app")
+        assert negotiating_app.registry.active_app_id == "results_app"
+
+    def test_refused_launch_does_not_stop_the_running_app(
+        self, negotiating_app: VisionPlayApp
+    ) -> None:
+        """A refused launch must not disturb whichever app is already active."""
+        window = negotiating_app.start()
+        window.launcher.app_launch_requested.emit("results_app")
+        assert negotiating_app.registry.active_app_id == "results_app"
+
+        window.launcher.app_launch_requested.emit("unavailable_app")
+
+        assert negotiating_app.registry.active_app_id == "results_app"

@@ -12,7 +12,13 @@ from visionplay.ui.launcher.launcher_widget import ALL_CATEGORIES, LauncherWidge
 _APP_ID_ROLE = Qt.ItemDataRole.UserRole
 
 
-def make_manifest(app_id: str, name: str, category: str, icon: str = "") -> AppManifest:
+def make_manifest(
+    app_id: str,
+    name: str,
+    category: str,
+    icon: str = "",
+    required_backends: tuple[str, ...] = (),
+) -> AppManifest:
     return AppManifest(
         id=app_id,
         name=name,
@@ -20,6 +26,7 @@ def make_manifest(app_id: str, name: str, category: str, icon: str = "") -> AppM
         version="0.1.0",
         api_version=CURRENT_API_VERSION,
         icon=icon,
+        required_backends=required_backends,
     )
 
 
@@ -151,11 +158,87 @@ class TestCategoryFilter:
         assert all(not tree.topLevelItem(i).isHidden() for i in range(tree.topLevelItemCount()))
 
 
-class TestAllAppsLaunchable:
-    def test_no_app_item_is_disabled(self, qapp: QApplication) -> None:
-        """Capability negotiation (greying out apps) is Phase 2 — nothing disabled yet."""
-        widget = LauncherWidget(SAMPLE_MANIFESTS)
-        for app_id in SAMPLE_MANIFESTS:
+#: Manifests exercising capability negotiation: one satisfied backend app,
+#: one unsatisfiable one, one declaring no backends at all.
+NEGOTIATION_MANIFESTS = {
+    "hands_app": make_manifest(
+        "hands_app", "Hands App", "ai_demos", required_backends=("mediapipe.hands",)
+    ),
+    "broken_app": make_manifest(
+        "broken_app", "Broken App", "ai_demos", required_backends=("missing.backend",)
+    ),
+    "plain_app": make_manifest("plain_app", "Plain App", "fitness"),
+}
+
+
+def only_hands_available(name: str) -> bool:
+    return name == "mediapipe.hands"
+
+
+class TestCapabilityNegotiation:
+    """M2.3: apps with unsatisfiable required_backends render greyed-out."""
+
+    def test_without_predicate_every_app_is_launchable(self, qapp: QApplication) -> None:
+        widget = LauncherWidget(NEGOTIATION_MANIFESTS)
+        for app_id in NEGOTIATION_MANIFESTS:
             item = find_app_item(widget, app_id)
             assert item.flags() & Qt.ItemFlag.ItemIsEnabled
             assert item.flags() & Qt.ItemFlag.ItemIsSelectable
+            assert widget.is_app_launchable(app_id)
+
+    def test_unsatisfied_app_renders_disabled(self, qapp: QApplication) -> None:
+        widget = LauncherWidget(NEGOTIATION_MANIFESTS, backend_available=only_hands_available)
+        item = find_app_item(widget, "broken_app")
+        assert not item.flags() & Qt.ItemFlag.ItemIsEnabled
+        assert not item.flags() & Qt.ItemFlag.ItemIsSelectable
+        assert not widget.is_app_launchable("broken_app")
+
+    def test_disabled_item_tooltip_names_the_missing_backend(self, qapp: QApplication) -> None:
+        widget = LauncherWidget(NEGOTIATION_MANIFESTS, backend_available=only_hands_available)
+        assert "missing.backend" in find_app_item(widget, "broken_app").toolTip(0)
+
+    def test_satisfied_app_stays_launchable(self, qapp: QApplication) -> None:
+        widget = LauncherWidget(NEGOTIATION_MANIFESTS, backend_available=only_hands_available)
+        item = find_app_item(widget, "hands_app")
+        assert item.flags() & Qt.ItemFlag.ItemIsEnabled
+        assert widget.is_app_launchable("hands_app")
+
+    def test_app_declaring_no_backends_is_always_launchable(self, qapp: QApplication) -> None:
+        widget = LauncherWidget(NEGOTIATION_MANIFESTS, backend_available=lambda name: False)
+        assert find_app_item(widget, "plain_app").flags() & Qt.ItemFlag.ItemIsEnabled
+        assert widget.is_app_launchable("plain_app")
+
+    def test_activating_disabled_app_does_not_emit(self, qapp: QApplication) -> None:
+        widget = LauncherWidget(NEGOTIATION_MANIFESTS, backend_available=only_hands_available)
+        received: list[str] = []
+        widget.app_launch_requested.connect(received.append)
+
+        # Programmatic emission bypasses Qt's disabled-item interaction block,
+        # exercising the widget's own explicit guard.
+        widget._tree.itemActivated.emit(find_app_item(widget, "broken_app"), 0)
+
+        assert received == []
+
+    def test_activating_enabled_app_still_emits(self, qapp: QApplication) -> None:
+        widget = LauncherWidget(NEGOTIATION_MANIFESTS, backend_available=only_hands_available)
+        received: list[str] = []
+        widget.app_launch_requested.connect(received.append)
+        widget._tree.itemActivated.emit(find_app_item(widget, "hands_app"), 0)
+        assert received == ["hands_app"]
+
+    def test_set_backend_availability_re_renders(self, qapp: QApplication) -> None:
+        widget = LauncherWidget(NEGOTIATION_MANIFESTS)
+        assert widget.is_app_launchable("broken_app")  # no predicate yet
+
+        widget.set_backend_availability(only_hands_available)
+        assert not widget.is_app_launchable("broken_app")
+        assert not find_app_item(widget, "broken_app").flags() & Qt.ItemFlag.ItemIsEnabled
+
+        widget.set_backend_availability(None)  # cleared: everything available again
+        assert widget.is_app_launchable("broken_app")
+
+    def test_set_apps_preserves_the_predicate(self, qapp: QApplication) -> None:
+        widget = LauncherWidget(backend_available=only_hands_available)
+        widget.set_apps(NEGOTIATION_MANIFESTS)
+        assert not widget.is_app_launchable("broken_app")
+        assert widget.is_app_launchable("hands_app")
