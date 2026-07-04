@@ -116,3 +116,18 @@ class TestCameraView:
         # in the centre must show the frame content, proving it was drawn.
         centre = rendered.pixelColor(rendered.width() // 2, rendered.height() // 2)
         assert centre.red() > 0
+
+    def test_frame_fills_the_widget_with_no_letterbox_bars(self, qapp: QApplication) -> None:
+        # A 16:9 frame in a tall, narrow widget: KeepAspectRatio would leave
+        # black bars top and bottom; the fix must fill every corner instead.
+        view = CameraView()
+        view.resize(200, 400)
+        view.show_frame(make_frame(fill=200))
+        rendered = view.grab().toImage()
+        corners = [
+            rendered.pixelColor(0, 0),
+            rendered.pixelColor(rendered.width() - 1, 0),
+            rendered.pixelColor(0, rendered.height() - 1),
+            rendered.pixelColor(rendered.width() - 1, rendered.height() - 1),
+        ]
+        assert all(color.red() > 0 for color in corners)

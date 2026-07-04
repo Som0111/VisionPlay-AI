@@ -138,6 +138,37 @@ class TestRead:
             source.read()
 
 
+class TestMirror:
+    def test_mirrored_by_default(self) -> None:
+        source = WebcamSource(0)
+        source.open()
+        FakeVideoCapture.instances[0].read = lambda: (  # type: ignore[method-assign]
+            True,
+            _distinct_columns_frame(),
+        )
+        frame = source.read()
+        assert frame is not None
+        expected = np.flip(_distinct_columns_frame(), axis=1)
+        assert np.array_equal(frame.image, expected)
+
+    def test_mirror_disabled_leaves_image_unflipped(self) -> None:
+        source = WebcamSource(0, mirror=False)
+        source.open()
+        raw = _distinct_columns_frame()
+        FakeVideoCapture.instances[0].read = lambda: (True, raw)  # type: ignore[method-assign]
+        frame = source.read()
+        assert frame is not None
+        assert np.array_equal(frame.image, raw)
+
+
+def _distinct_columns_frame() -> np.ndarray:
+    """A 4x4 BGR image whose columns are all distinct, to detect a horizontal flip."""
+    image = np.zeros((4, 4, 3), dtype=np.uint8)
+    for column in range(4):
+        image[:, column] = (column, column, column)
+    return image
+
+
 class TestRelease:
     def test_release_closes_device(self) -> None:
         source = WebcamSource(0)

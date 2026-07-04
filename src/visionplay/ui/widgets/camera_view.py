@@ -116,13 +116,20 @@ class CameraView(QWidget):
         self.update()
 
     def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802 (Qt naming)
-        """Paint the current frame scaled to fit, plus FPS/status overlays."""
+        """Paint the current frame scaled to fill, plus FPS/status overlays.
+
+        Scales by *expanding* to cover the widget completely (cropping
+        whatever overflows the aspect-ratio mismatch) rather than *fitting*
+        inside it — the widget's own clipping keeps the crop safe, and the
+        payoff is no black letterbox bars above/below or left/right of the
+        feed regardless of the window's aspect ratio.
+        """
         painter = QPainter(self)
         painter.fillRect(self.rect(), Qt.GlobalColor.black)
         if self._pixmap is not None:
             scaled = self._pixmap.scaled(
                 self.size(),
-                Qt.AspectRatioMode.KeepAspectRatio,
+                Qt.AspectRatioMode.KeepAspectRatioByExpanding,
                 Qt.TransformationMode.SmoothTransformation,
             )
             offset_x = (self.width() - scaled.width()) // 2

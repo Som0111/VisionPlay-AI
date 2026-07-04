@@ -33,6 +33,11 @@ def make_frame(color_format: ColorFormat = ColorFormat.BGR) -> Frame:
     return Frame.from_image(frame_id=0, timestamp=0.0, image=image, color_format=color_format)
 
 
+def make_frame_at(timestamp: float) -> Frame:
+    image = np.zeros((90, 120, 3), dtype=np.uint8)
+    return Frame.from_image(frame_id=0, timestamp=timestamp, image=image)
+
+
 class TestConfiguration:
     def test_is_inference_backend(self) -> None:
         assert isinstance(
@@ -92,6 +97,43 @@ class TestLoadGuards:
         assert not backend.is_loaded()
 
 
+class TestVideoModeTimestamps:
+    """``_next_timestamp_ms`` — the monotonic tick VIDEO mode requires.
+
+    Pure arithmetic, no MediaPipe graph needed; the real graph's rejection
+    of a non-increasing timestamp is covered by
+    ``TestRealInference.test_infer_tolerates_non_increasing_capture_timestamps``.
+    """
+
+    def test_first_call_uses_capture_time_in_milliseconds(self) -> None:
+        backend = MediaPipeBackend(MediaPipeTask.HAND_LANDMARKS, DUMMY_MODEL)
+        assert backend._next_timestamp_ms(1.5) == 1500
+
+    def test_increasing_capture_times_pass_through(self) -> None:
+        backend = MediaPipeBackend(MediaPipeTask.HAND_LANDMARKS, DUMMY_MODEL)
+        backend._next_timestamp_ms(0.0)
+        assert backend._next_timestamp_ms(0.05) == 50
+
+    def test_duplicate_timestamp_is_bumped_by_one_millisecond(self) -> None:
+        backend = MediaPipeBackend(MediaPipeTask.HAND_LANDMARKS, DUMMY_MODEL)
+        first = backend._next_timestamp_ms(2.0)
+        second = backend._next_timestamp_ms(2.0)
+        assert second == first + 1
+
+    def test_out_of_order_timestamp_is_bumped_past_the_last_value(self) -> None:
+        backend = MediaPipeBackend(MediaPipeTask.HAND_LANDMARKS, DUMMY_MODEL)
+        first = backend._next_timestamp_ms(5.0)
+        second = backend._next_timestamp_ms(1.0)  # earlier than the first call
+        assert second == first + 1
+
+    def test_load_resets_the_timestamp_sequence(self, tmp_path: Path) -> None:
+        backend = MediaPipeBackend(MediaPipeTask.HAND_LANDMARKS, tmp_path / "absent.task")
+        backend._next_timestamp_ms(10.0)
+        with pytest.raises(InferenceError):
+            backend.load()  # fails (missing model file) but still resets state
+        assert backend._next_timestamp_ms(0.0) == 0
+
+
 @pytest.mark.integration
 class TestRealInference:
     def test_load_and_unload(self, hand_landmarker_model: Path) -> None:
@@ -134,6 +176,21 @@ class TestRealInference:
         finally:
             backend.unload()
         assert isinstance(result, HandLandmarkResult)
+
+    def test_infer_tolerates_non_increasing_capture_timestamps(
+        self, hand_landmarker_model: Path
+    ) -> None:
+        # A real VIDEO-mode graph rejects a non-increasing timestamp outright;
+        # this proves the backend's own monotonic guard keeps every call
+        # (including out-of-order ones) succeeding instead of raising.
+        backend = MediaPipeBackend(MediaPipeTask.HAND_LANDMARKS, hand_landmarker_model)
+        backend.load()
+        try:
+            for timestamp in (0.0, 0.03, 0.03, 0.01, 0.06):
+                result = backend.infer(make_frame_at(timestamp))
+                assert isinstance(result, HandLandmarkResult)
+        finally:
+            backend.unload()
 
 
 @pytest.mark.integration

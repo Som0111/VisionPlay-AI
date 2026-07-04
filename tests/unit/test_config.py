@@ -18,6 +18,7 @@ class TestDefaultConfig:
         d = default_config()
         assert d["app"]["log_level"] == "INFO"
         assert d["camera"]["device_index"] == 0
+        assert d["camera"]["mirror"] is True
         assert d["inference"]["device"] == {"type": "cpu"}
         assert d["inference"]["model_cache_dir"] is None
 
@@ -131,6 +132,11 @@ class TestValidationErrors:
     def test_bad_camera_values(self, cfg_path: Path, bad: str) -> None:
         cfg_path.write_text(f"camera:\n  device_index: {bad}\n", encoding="utf-8")
         with pytest.raises(ConfigError, match="camera.device_index"):
+            load_config(cfg_path)
+
+    def test_bad_camera_mirror_raises(self, cfg_path: Path) -> None:
+        cfg_path.write_text("camera:\n  mirror: not-a-bool\n", encoding="utf-8")
+        with pytest.raises(ConfigError, match="camera.mirror"):
             load_config(cfg_path)
 
     def test_unserializable_value_raises_on_save(self, cfg_path: Path) -> None:

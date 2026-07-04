@@ -128,6 +128,10 @@ class MediaPipeBackend(InferenceBackend):
         # mediapipe landmarker once loaded; None while unloaded. Typed Any
         # because mediapipe ships no stubs (see pyproject mypy overrides).
         self._landmarker: Any = None
+        # Last timestamp (ms) passed to detect_for_video; VIDEO mode requires
+        # strictly increasing values per landmarker instance. Reset on load()
+        # so each graph starts its own monotonic sequence.
+        self._last_timestamp_ms: int | None = None
 
     @property
     def name(self) -> str:
@@ -163,6 +167,7 @@ class MediaPipeBackend(InferenceBackend):
         """
         if self._landmarker is not None:
             return
+        self._last_timestamp_ms = None
         if not self._model_path.is_file():
             raise InferenceError(f"Model file for {self.name!r} not found at {self._model_path}")
         try:
@@ -181,7 +186,12 @@ class MediaPipeBackend(InferenceBackend):
                 base_options=mp_python.BaseOptions(
                     model_asset_path=str(self._model_path), delegate=delegate
                 ),
-                running_mode=vision.RunningMode.IMAGE,
+                # VIDEO mode (not IMAGE) so MediaPipe tracks landmarks across
+                # frames instead of re-detecting each one in isolation — the
+                # single biggest lever against frame-to-frame landmark jitter
+                # on a live camera stream. Requires detect_for_video() with a
+                # strictly increasing timestamp per call (see infer()).
+                running_mode=vision.RunningMode.VIDEO,
                 **{binding.count_option: binding.max_count},
             )
             self._landmarker = landmarker_cls.create_from_options(options)
@@ -211,15 +221,33 @@ class MediaPipeBackend(InferenceBackend):
 
             rgb = _to_rgb(frame)
             mp_image = mp.Image(image_format=mp.ImageFormat.SRGB, data=rgb)
-            detection = self._landmarker.detect(mp_image)
+            timestamp_ms = self._next_timestamp_ms(frame.timestamp)
+            detection = self._landmarker.detect_for_video(mp_image, timestamp_ms)
         except Exception as exc:
             raise InferenceError(f"MediaPipe inference failed for {self.name!r}: {exc}") from exc
         return _TASK_BINDINGS[self._task].convert(detection)
+
+    def _next_timestamp_ms(self, capture_timestamp: float) -> int:
+        """Convert a frame's capture time to a strictly increasing millisecond tick.
+
+        VIDEO mode rejects a timestamp that does not exceed the previous one
+        per landmarker instance. Real capture (``time.time()``-based) is
+        already increasing; this only guards the boundary case of two frames
+        landing on the same millisecond (fast capture) or out-of-order
+        synthetic timestamps in tests, by bumping to one past the last value
+        instead of raising.
+        """
+        candidate = int(capture_timestamp * 1000)
+        if self._last_timestamp_ms is not None and candidate <= self._last_timestamp_ms:
+            candidate = self._last_timestamp_ms + 1
+        self._last_timestamp_ms = candidate
+        return candidate
 
     def unload(self) -> None:
         """Release the MediaPipe graph. Idempotent; safe if never loaded."""
         landmarker = self._landmarker
         self._landmarker = None
+        self._last_timestamp_ms = None
         if landmarker is not None:
             landmarker.close()
 

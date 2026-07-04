@@ -6,7 +6,13 @@ from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QTreeWidgetItem
 
 from visionplay.core.plugin_base import CURRENT_API_VERSION, AppManifest
-from visionplay.ui.launcher.launcher_widget import ALL_CATEGORIES, LauncherWidget
+from visionplay.ui.launcher.launcher_widget import (
+    _COLLAPSE_LABEL,
+    _COLLAPSED_WIDTH,
+    _EXPAND_LABEL,
+    ALL_CATEGORIES,
+    LauncherWidget,
+)
 
 #: Mirrors LauncherWidget's internal item-data role for white-box lookups.
 _APP_ID_ROLE = Qt.ItemDataRole.UserRole
@@ -242,3 +248,56 @@ class TestCapabilityNegotiation:
         widget.set_apps(NEGOTIATION_MANIFESTS)
         assert not widget.is_app_launchable("broken_app")
         assert widget.is_app_launchable("hands_app")
+
+
+class TestCollapse:
+    # isHidden() reflects the widget's own explicit hide/show state; unlike
+    # isVisible(), it does not depend on the top-level window actually being
+    # shown on screen — which these offscreen tests never do.
+    def test_starts_expanded(self, qapp: QApplication) -> None:
+        widget = LauncherWidget(SAMPLE_MANIFESTS)
+        assert not widget.is_collapsed
+        assert not widget._content.isHidden()
+        assert widget._toggle_button.text() == _COLLAPSE_LABEL
+
+    def test_toggle_collapses_the_sidebar(self, qapp: QApplication) -> None:
+        widget = LauncherWidget(SAMPLE_MANIFESTS)
+        widget.toggle_collapsed()
+        assert widget.is_collapsed
+        assert widget._content.isHidden()
+        assert widget._toggle_button.text() == _EXPAND_LABEL
+        assert widget.maximumWidth() == _COLLAPSED_WIDTH
+
+    def test_toggle_button_stays_visible_when_collapsed(self, qapp: QApplication) -> None:
+        widget = LauncherWidget(SAMPLE_MANIFESTS)
+        widget.toggle_collapsed()
+        assert not widget._toggle_button.isHidden()
+
+    def test_toggling_twice_restores_expanded_state(self, qapp: QApplication) -> None:
+        widget = LauncherWidget(SAMPLE_MANIFESTS)
+        widget.toggle_collapsed()
+        widget.toggle_collapsed()
+        assert not widget.is_collapsed
+        assert not widget._content.isHidden()
+        assert widget._toggle_button.text() == _COLLAPSE_LABEL
+        assert widget.maximumWidth() > _COLLAPSED_WIDTH
+
+    def test_set_collapsed_true_then_false(self, qapp: QApplication) -> None:
+        widget = LauncherWidget(SAMPLE_MANIFESTS)
+        widget.set_collapsed(True)
+        assert widget.is_collapsed
+        widget.set_collapsed(False)
+        assert not widget.is_collapsed
+        assert not widget._content.isHidden()
+
+    def test_collapsing_preserves_app_selection_state(self, qapp: QApplication) -> None:
+        widget = LauncherWidget(SAMPLE_MANIFESTS)
+        widget._category_filter.setCurrentText("fitness")
+        widget.toggle_collapsed()
+        widget.toggle_collapsed()
+        assert widget._category_filter.currentText() == "fitness"
+
+    def test_clicking_toggle_button_collapses(self, qapp: QApplication) -> None:
+        widget = LauncherWidget(SAMPLE_MANIFESTS)
+        widget._toggle_button.click()
+        assert widget.is_collapsed

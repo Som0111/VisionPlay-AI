@@ -63,6 +63,7 @@ class WebcamSource(CameraSource):
         *,
         frame_width: int | None = None,
         frame_height: int | None = None,
+        mirror: bool = True,
     ) -> None:
         """Configure the source; the device is not touched until :meth:`open`.
 
@@ -72,6 +73,16 @@ class WebcamSource(CameraSource):
                 the driver default.
             frame_height: Requested capture height in pixels; ``None`` keeps
                 the driver default.
+            mirror: Horizontally flip every captured frame so it reads like
+                a mirror (move your hand right, it appears to move right on
+                screen) — the expected orientation for a selfie-style,
+                gesture-controlled app. Flipping happens here, before any
+                inference backend runs, so landmark coordinates and the
+                rendered image always agree; flipping only for display would
+                desync gesture math (pinch/drawing position) from what the
+                user sees. ``True`` by default; set ``False`` for a source
+                that is not a front-facing selfie camera (e.g. a fixed
+                security-style camera).
 
         Raises:
             ValueError: If ``device_index`` is negative or a requested
@@ -85,6 +96,7 @@ class WebcamSource(CameraSource):
         self._device_index = device_index
         self._frame_width = frame_width
         self._frame_height = frame_height
+        self._mirror = mirror
         self._capture: cv2.VideoCapture | None = None
         self._next_frame_id = 0
 
@@ -136,6 +148,8 @@ class WebcamSource(CameraSource):
                 f"Camera {self._device_index} stopped delivering frames "
                 "(device disconnected or claimed by another application)"
             )
+        if self._mirror:
+            image = cv2.flip(image, 1)
         frame = Frame.from_image(
             frame_id=self._next_frame_id,
             timestamp=time.time(),

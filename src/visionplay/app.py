@@ -307,6 +307,7 @@ def _webcam_from_config(config: Config) -> WebcamSource:
         camera.get("device_index", 0),
         frame_width=width if width > 0 else None,
         frame_height=height if height > 0 else None,
+        mirror=camera.get("mirror", True),
     )
 
 

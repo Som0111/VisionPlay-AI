@@ -27,7 +27,14 @@ from collections.abc import Callable, Mapping
 
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QIcon
-from PySide6.QtWidgets import QComboBox, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget
+from PySide6.QtWidgets import (
+    QComboBox,
+    QPushButton,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 from visionplay.core.plugin_base import AppManifest
 
@@ -44,12 +51,30 @@ ALL_CATEGORIES: str = "All Categories"
 #: Item-data role used to stash each app-entry item's app id.
 _APP_ID_ROLE = Qt.ItemDataRole.UserRole
 
+#: Toggle button label while the sidebar is expanded/collapsed.
+_COLLAPSE_LABEL: str = "← Hide"
+_EXPAND_LABEL: str = "→"
+
+#: Sidebar width while collapsed — just enough for the toggle button, so the
+#: rest of the window (the drawing/canvas area) gets the freed-up space.
+_COLLAPSED_WIDTH: int = 32
+
+#: Qt's own "no maximum" sentinel (``QWIDGETSIZE_MAX``, not exposed as a
+#: Python constant by PySide6) — restores the sidebar's unconstrained width
+#: on expand.
+_UNCONSTRAINED_WIDTH: int = 16777215
+
 
 class LauncherWidget(QWidget):
     """Grouped, filterable app list; emits launch intent, owns no lifecycle.
 
     Category header rows are unselectable and never emit
     :attr:`app_launch_requested` — only activating an actual app entry does.
+
+    Collapsible: a toggle button above the filter/tree hides them and
+    narrows the sidebar to a strip (freeing width for whatever sits next to
+    it, e.g. a drawing canvas), while the button itself stays visible so the
+    sidebar can always be reopened.
     """
 
     #: Emitted with the app's manifest id when the user activates an app
@@ -85,9 +110,22 @@ class LauncherWidget(QWidget):
         self._tree.setHeaderHidden(True)
         self._tree.itemActivated.connect(self._on_item_activated)
 
+        # The collapsible content (filter + tree) lives in its own container
+        # so the toggle button — outside the container — stays visible and
+        # clickable even while the rest of the sidebar is hidden.
+        self._content = QWidget()
+        content_layout = QVBoxLayout(self._content)
+        content_layout.setContentsMargins(0, 0, 0, 0)
+        content_layout.addWidget(self._category_filter)
+        content_layout.addWidget(self._tree)
+
+        self._collapsed = False
+        self._toggle_button = QPushButton(_COLLAPSE_LABEL)
+        self._toggle_button.clicked.connect(self.toggle_collapsed)
+
         layout = QVBoxLayout(self)
-        layout.addWidget(self._category_filter)
-        layout.addWidget(self._tree)
+        layout.addWidget(self._toggle_button)
+        layout.addWidget(self._content)
 
         self.set_apps(manifests or {})
 
@@ -95,6 +133,34 @@ class LauncherWidget(QWidget):
     def manifests(self) -> Mapping[str, AppManifest]:
         """The apps currently displayed, keyed by id."""
         return self._manifests
+
+    @property
+    def is_collapsed(self) -> bool:
+        """``True`` while the sidebar is collapsed to the toggle strip."""
+        return self._collapsed
+
+    def toggle_collapsed(self) -> None:
+        """Flip collapsed/expanded. The toggle button remains visible either way.
+
+        Collapsing hides the filter/tree and shrinks the sidebar to a narrow
+        strip (:data:`_COLLAPSED_WIDTH`) so a parent layout (e.g. the
+        launcher/camera-view split in ``MainWindow``) hands the freed-up
+        width to whatever sits next to it. Expanding reverses both.
+        """
+        self.set_collapsed(not self._collapsed)
+
+    def set_collapsed(self, collapsed: bool) -> None:
+        """Set the sidebar's collapsed state directly (used by :meth:`toggle_collapsed`).
+
+        Args:
+            collapsed: ``True`` to hide the filter/tree and narrow the
+                sidebar; ``False`` to restore both.
+        """
+        self._collapsed = collapsed
+        self._content.setVisible(not collapsed)
+        self._toggle_button.setText(_EXPAND_LABEL if collapsed else _COLLAPSE_LABEL)
+        width = _COLLAPSED_WIDTH if collapsed else _UNCONSTRAINED_WIDTH
+        self.setMaximumWidth(width)
 
     def set_apps(self, manifests: Mapping[str, AppManifest]) -> None:
         """Replace the displayed apps and rebuild the grouped tree/filter.

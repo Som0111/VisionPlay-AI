@@ -45,15 +45,15 @@ with no live camera or Qt required, and no regression to the existing hand-track
 ---
 
 ## M3.2 — Air Canvas MVP: gesture drawing core
-- [ ] Scaffold `apps/air_canvas/` from `apps/_template/` (`required_backends:
+- [x] Scaffold `apps/air_canvas/` from `apps/_template/` (`required_backends:
       ["mediapipe.hands"]`), establishing the plugin pattern the remaining apps in this phase
       copy.
-- [ ] `processor.py` — headless canvas state model: stroke list, pinch-to-draw (pen down/up)
+- [x] `processor.py` — headless canvas state model: stroke list, pinch-to-draw (pen down/up)
       using M3.1's pinch detector, smoothed fingertip path via the shared smoothing filter,
       brush size/color state, eraser mode, clear-all gesture.
-- [ ] `widget.py` — composited camera + canvas render; toolbar for color/brush/eraser/clear
+- [x] `widget.py` — composited camera + canvas render; toolbar for color/brush/eraser/clear
       with hover-or-pinch selection over toolbar regions.
-- [ ] Unit tests: stroke building from synthetic landmark sequences, pinch pen-down/up state
+- [x] Unit tests: stroke building from synthetic landmark sequences, pinch pen-down/up state
       machine, eraser hit-testing — all against `processor.py` with no widget/Qt involved.
 
 **Files expected to change:** new `src/visionplay/apps/air_canvas/{__init__,manifest,plugin,
@@ -66,14 +66,14 @@ stops cleanly without crashing the shell.
 ---
 
 ## M3.3 — Air Canvas flagship features: undo/redo, layers, shapes, export
-- [ ] Command-pattern undo/redo stack in `processor.py` covering stroke add, erase, and clear.
-- [ ] Layer model: add/select/toggle-visibility/reorder, with per-layer compositing in
+- [x] Command-pattern undo/redo stack in `processor.py` covering stroke add, erase, and clear.
+- [x] Layer model: add/select/toggle-visibility/reorder, with per-layer compositing in
       `widget.py`.
-- [ ] Shape recognition: classify a completed stroke as a near-circle/line/rectangle and
+- [x] Shape recognition: classify a completed stroke as a near-circle/line/rectangle and
       snap-replace it, toggleable on/off.
-- [ ] Export: save the canvas (with or without camera background) to PNG via a file dialog;
+- [x] Export: save the canvas (with or without camera background) to PNG via a file dialog;
       keyboard shortcuts for undo/redo/save.
-- [ ] Unit tests: undo/redo invariants (including redo-stack invalidation on new strokes),
+- [x] Unit tests: undo/redo invariants (including redo-stack invalidation on new strokes),
       layer compositing order, shape classifier against synthetic stroke fixtures.
 
 **Files expected to change:** `src/visionplay/apps/air_canvas/processor.py`, `widget.py`
