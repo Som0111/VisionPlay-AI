@@ -86,14 +86,14 @@ and is demo-ready as the flagship app.
 ---
 
 ## M3.4 — Fruit Ninja game
-- [ ] Scaffold `apps/fruit_ninja/` (`required_backends: ["mediapipe.hands"]`); `processor.py`
+- [x] Scaffold `apps/fruit_ninja/` (`required_backends: ["mediapipe.hands"]`); `processor.py`
       owns the full game simulation as pure, bounded-per-call logic driven from `on_frame`:
       fruit spawner, parabolic physics, fingertip blade trail with a velocity threshold (using
       M3.1's velocity tracker), segment-vs-circle slice collision, miss/bomb handling, score and
       combo multiplier, lives, game-over/restart states.
-- [ ] `widget.py` — render fruits/halves/blade trail/particles and a HUD (score, combo, lives),
+- [x] `widget.py` — render fruits/halves/blade trail/particles and a HUD (score, combo, lives),
       plus a start/restart overlay.
-- [ ] Unit tests: physics stepping determinism, collision detection against synthetic blade
+- [x] Unit tests: physics stepping determinism, collision detection against synthetic blade
       paths, combo scoring rules, and game state transitions — all headless.
 
 **Files expected to change:** new `src/visionplay/apps/fruit_ninja/*.py`; `tests/unit/apps/

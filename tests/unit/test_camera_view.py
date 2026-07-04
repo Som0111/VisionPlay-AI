@@ -6,6 +6,8 @@ from collections.abc import Iterator
 
 import numpy as np
 import pytest
+from PySide6.QtCore import Qt
+from PySide6.QtGui import QKeyEvent
 from PySide6.QtWidgets import QApplication
 
 from visionplay.ui.widgets import camera_view as camera_view_module
@@ -116,6 +118,14 @@ class TestCameraView:
         # in the centre must show the frame content, proving it was drawn.
         centre = rendered.pixelColor(rendered.width() // 2, rendered.height() // 2)
         assert centre.red() > 0
+
+    def test_key_press_emits_key_pressed_with_the_key_code(self, qapp: QApplication) -> None:
+        view = CameraView()
+        received: list[int] = []
+        view.key_pressed.connect(received.append)
+        event = QKeyEvent(QKeyEvent.Type.KeyPress, Qt.Key.Key_Space, Qt.KeyboardModifier.NoModifier)
+        view.keyPressEvent(event)
+        assert received == [Qt.Key.Key_Space]
 
     def test_frame_fills_the_widget_with_no_letterbox_bars(self, qapp: QApplication) -> None:
         # A 16:9 frame in a tall, narrow widget: KeepAspectRatio would leave

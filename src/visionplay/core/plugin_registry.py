@@ -105,6 +105,19 @@ class PluginRegistry:
         """The currently active app's id, or ``None`` if no app is active."""
         return self._active_app_id
 
+    @property
+    def active_plugin(self) -> AppPlugin | None:
+        """The currently active app's plugin instance, or ``None`` if none is active.
+
+        Exists so the UI layer (``app.py``) can reach an app-specific hook —
+        e.g. a widget factory keyed by app id — off the same plugin instance
+        the registry already drives, without the registry itself knowing
+        anything about Qt or widgets.
+        """
+        if self._active_app_id is None:
+            return None
+        return self._apps[self._active_app_id].plugin
+
     # -- Discovery ---------------------------------------------------------
 
     def discover(self) -> None:

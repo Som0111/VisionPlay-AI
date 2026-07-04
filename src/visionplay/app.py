@@ -39,6 +39,7 @@ import logging
 import sys
 from collections.abc import Callable
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 
 from visionplay import __version__
@@ -205,6 +206,7 @@ class VisionPlayApp:
         # Qt queues delivery onto the widget's (main) thread.
         bridge.frame_ready.connect(window.camera_view.show_frame)
         bridge.stream_ended.connect(window.camera_view.show_status)
+        window.camera_view.key_pressed.connect(self._on_key_pressed)
         window.closing.connect(self.shutdown)
         self._window = window
         self._bridge = bridge
@@ -245,6 +247,31 @@ class VisionPlayApp:
                 )
                 return
         self._registry.start(app_id)
+        # Gesture-driven rendering flows through the frame image regardless,
+        # but any keyboard interaction (see _on_key_pressed) only works once
+        # the camera view actually has focus to receive it.
+        if self._window is not None:
+            self._window.camera_view.setFocus()
+
+    def _on_key_pressed(self, key: int) -> None:
+        """Forward a key press to the active app's processor, if it wants one.
+
+        Connected to :attr:`~visionplay.ui.widgets.camera_view.CameraView.
+        key_pressed`. Deliberately narrow and generic instead of naming any
+        specific app: any processor exposing a thread-safe
+        ``request_start()`` (Fruit Ninja's start/restart today) gets it
+        called on Space/Enter/Return, mirroring how each app's own
+        ``widget.py`` already documents its keyboard shortcuts — this is
+        the missing wiring that actually delivers key events to it, since
+        the running app always shows the shared ``CameraView``, never a
+        per-app widget instance.
+        """
+        if key not in (Qt.Key.Key_Space, Qt.Key.Key_Return, Qt.Key.Key_Enter):
+            return
+        processor = getattr(self._registry.active_plugin, "processor", None)
+        request_start = getattr(processor, "request_start", None)
+        if request_start is not None:
+            request_start()
 
     def shutdown(self) -> None:
         """Stop the active app, then the bridge and pipeline. Idempotent.

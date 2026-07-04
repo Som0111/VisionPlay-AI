@@ -16,8 +16,8 @@ from collections import deque
 from time import monotonic
 
 import numpy as np
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QColor, QImage, QPainter, QPaintEvent, QPixmap
+from PySide6.QtCore import Qt, Signal
+from PySide6.QtGui import QColor, QImage, QKeyEvent, QPainter, QPaintEvent, QPixmap
 from PySide6.QtWidgets import QWidget
 
 from visionplay.vision.pipeline.frame_types import ColorFormat, Frame
@@ -62,7 +62,21 @@ class CameraView(QWidget):
     Until the first frame arrives (or after the stream ends) a status
     message is shown instead; :meth:`show_status` lets the application
     surface camera errors in place of the feed.
+
+    The active app's own game/gesture logic renders straight onto the frame
+    image (``processor.py``, per ``docs/plugin-development.md``), so this
+    widget never needs per-app rendering knowledge. Keyboard interaction is
+    the one thing that can't work that way — a key press doesn't flow
+    through the frame pipeline — so this widget also forwards raw key
+    presses via :attr:`key_pressed`, letting ``app.py`` route them to
+    whichever app is active without ``CameraView`` itself knowing anything
+    about any specific app.
     """
+
+    #: A key was pressed while this view has focus. Payload is the Qt key
+    #: code (``event.key()``); ``app.py`` decides what, if anything, the
+    #: active app does with it.
+    key_pressed = Signal(int)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         """Create an empty view showing the waiting status."""
@@ -72,6 +86,7 @@ class CameraView(QWidget):
         self._frame_times: deque[float] = deque(maxlen=_FPS_WINDOW)
         self._frames_shown = 0
         self.setMinimumSize(320, 240)
+        self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
 
     @property
     def frames_shown(self) -> int:
@@ -114,6 +129,11 @@ class CameraView(QWidget):
         """
         self._status = message
         self.update()
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:  # noqa: N802 (Qt naming)
+        """Emit :attr:`key_pressed`, then defer to normal Qt key handling."""
+        self.key_pressed.emit(event.key())
+        super().keyPressEvent(event)
 
     def paintEvent(self, event: QPaintEvent) -> None:  # noqa: N802 (Qt naming)
         """Paint the current frame scaled to fill, plus FPS/status overlays.

@@ -15,6 +15,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication
 from tests.fixtures.plugin_apps_fixture._support import RecordingPlugin
 
@@ -269,6 +270,66 @@ class TestLauncherIntegration:
         assert app.registry.active_app_id is None
         assert "on_stop" in plugin.calls
         assert not app.pipeline.is_running()
+
+
+class TestKeyForwarding:
+    """The running app always shows the shared ``CameraView``, never a
+    per-app widget instance (each app's game/gesture logic renders straight
+    onto the frame image instead), so a key press can only ever reach an
+    active app's processor through this generic forwarding path."""
+
+    def test_space_starts_fruit_ninja(self, qapp: QApplication, tmp_path: Path) -> None:
+        from visionplay.apps.fruit_ninja.processor import GameState
+
+        app = VisionPlayApp(AppPaths.for_root(tmp_path), source=FakeSource())
+        window = app.start()
+        window.launcher.app_launch_requested.emit("fruit_ninja")
+        assert wait_until(lambda: app.registry.active_app_id == "fruit_ninja")
+        plugin = app.registry.active_plugin
+        assert plugin is not None
+
+        window.camera_view.key_pressed.emit(Qt.Key.Key_Space)
+
+        assert wait_until(lambda: plugin.processor.state is GameState.PLAYING)  # type: ignore[attr-defined]
+        app.shutdown()
+
+    def test_unrelated_key_does_not_start_it(self, qapp: QApplication, tmp_path: Path) -> None:
+        from visionplay.apps.fruit_ninja.processor import GameState
+
+        app = VisionPlayApp(AppPaths.for_root(tmp_path), source=FakeSource())
+        window = app.start()
+        window.launcher.app_launch_requested.emit("fruit_ninja")
+        assert wait_until(lambda: app.registry.active_app_id == "fruit_ninja")
+        plugin = app.registry.active_plugin
+        assert plugin is not None
+
+        window.camera_view.key_pressed.emit(Qt.Key.Key_A)
+
+        assert plugin.processor.state is GameState.READY  # type: ignore[attr-defined]
+        app.shutdown()
+
+    def test_key_press_with_no_active_app_does_not_raise(
+        self, qapp: QApplication, tmp_path: Path
+    ) -> None:
+        app = VisionPlayApp(AppPaths.for_root(tmp_path), source=FakeSource())
+        window = app.start()
+        window.camera_view.key_pressed.emit(Qt.Key.Key_Space)  # must not raise
+        app.shutdown()
+
+    def test_key_press_for_an_app_without_request_start_does_not_raise(
+        self, qapp: QApplication, tmp_path: Path
+    ) -> None:
+        app = VisionPlayApp(
+            AppPaths.for_root(tmp_path),
+            source=FakeSource(),
+            apps_package=FIXTURE_APPS_PACKAGE,
+        )
+        window = app.start()
+        window.launcher.app_launch_requested.emit("valid_app")
+        assert wait_until(lambda: app.registry.active_app_id == "valid_app")
+
+        window.camera_view.key_pressed.emit(Qt.Key.Key_Space)  # must not raise
+        app.shutdown()
 
 
 class _FakeHandsBackend(InferenceBackend):
